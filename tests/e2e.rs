@@ -47,7 +47,17 @@ fn ws(root: &Path) -> Command {
     let mut cmd = Command::cargo_bin("ws").unwrap();
     cmd.current_dir(root)
         .env("WS_ZOXIDE_CMD", "true")
+        // An empty WS_CONFIG turns the global layer off, so whatever the
+        // developer running these tests keeps in ~/.config/ws cannot reach them.
+        .env("WS_CONFIG", "")
         .args(["--mux", "none"]);
+    cmd
+}
+
+/// Like [`ws`], but with a global configuration file in play.
+fn ws_with_global(root: &Path, global: &Path) -> Command {
+    let mut cmd = ws(root);
+    cmd.env("WS_CONFIG", global);
     cmd
 }
 
@@ -276,6 +286,7 @@ fn zoxide_registers_and_forgets_the_paths() {
     let mut cmd = Command::cargo_bin("ws").unwrap();
     cmd.current_dir(&root)
         .env("WS_ZOXIDE_CMD", stub_path.to_string_lossy().to_string())
+        .env("WS_CONFIG", "")
         .args(["--mux", "none", "switch", "feature/JIRA-123"])
         .assert()
         .success();
@@ -293,6 +304,7 @@ fn zoxide_registers_and_forgets_the_paths() {
     let mut cmd = Command::cargo_bin("ws").unwrap();
     cmd.current_dir(&root)
         .env("WS_ZOXIDE_CMD", stub_path.to_string_lossy().to_string())
+        .env("WS_CONFIG", "")
         .args(["--mux", "none", "rm", "feature/JIRA-123"])
         .assert()
         .success();
@@ -445,6 +457,144 @@ fn a_worktree_outside_the_root_still_finds_its_workspace() {
 }
 
 #[test]
+fn the_global_configuration_supplies_settings_and_the_workspace_overrides_them() {
+    let tmp = TempDir::new().unwrap();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+    let web = origin_repo(&origins, "web");
+
+    let global = tmp.path().join("config/ws/config.toml");
+    fs::create_dir_all(global.parent().unwrap()).unwrap();
+    fs::write(
+        &global,
+        "branch_dirs = \"nested\"\nworktree_dir = \"trees\"\n\
+         [mux]\nroot_window = \"shared\"\nsession = \"{workspace}/{branch}\"\n",
+    )
+    .unwrap();
+
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    // Almost empty: identity, repositories, and the one key it disagrees on.
+    write_config(
+        &root,
+        &format!(
+            "name = \"acme\"\nbranch_dirs = \"flat\"\n\
+             [[repo]]\nname = \"api\"\nurl = \"{}\"\n\
+             [[repo]]\nname = \"web\"\nurl = \"{}\"\n",
+            api.display(),
+            web.display()
+        ),
+    );
+
+    ws_with_global(&root, &global)
+        .args(["switch", "feature/JIRA-123"])
+        .assert()
+        .success();
+
+    // worktree_dir came from the global file, branch_dirs from the workspace.
+    assert!(root.join("trees/feature-JIRA-123/api/.git").exists());
+    assert!(!root.join("trees/feature/JIRA-123").exists());
+
+    // A key the workspace never mentions still comes from the global [mux].
+    let status = ws_with_global(&root, &global)
+        .current_dir(root.join("trees/feature-JIRA-123/api"))
+        .arg("status")
+        .output()
+        .unwrap();
+    let text = String::from_utf8(status.stdout).unwrap();
+    assert!(text.contains("session    acme/feature-JIRA-123"), "{text}");
+    // Both files are reported as sources.
+    assert!(
+        text.contains(&global.to_string_lossy().to_string()),
+        "{text}"
+    );
+    assert!(text.contains("ws.toml"), "{text}");
+}
+
+#[test]
+fn repositories_are_refused_in_the_global_configuration() {
+    let tmp = TempDir::new().unwrap();
+    let global = tmp.path().join("config.toml");
+    fs::write(&global, "[[repo]]\nname = \"api\"\nurl = \"x/api.git\"\n").unwrap();
+
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(&root, "name = \"acme\"\n");
+
+    let out = ws_with_global(&root, &global).arg("list").output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains("repositories belong in"), "{stderr}");
+}
+
+#[test]
+fn a_missing_global_configuration_is_not_an_error() {
+    let tmp = TempDir::new().unwrap();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!("[[repo]]\nname = \"api\"\nurl = \"{}\"\n", api.display()),
+    );
+
+    ws_with_global(&root, &tmp.path().join("nowhere/config.toml"))
+        .args(["switch", "main"])
+        .assert()
+        .success();
+    assert!(root.join("main/.git").exists());
+}
+
+#[test]
+fn init_global_writes_a_settings_file_without_repositories() {
+    let tmp = TempDir::new().unwrap();
+    let global = tmp.path().join("config/ws/config.toml");
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+
+    ws_with_global(&root, &global)
+        .args(["init", "--global"])
+        .assert()
+        .success();
+    let text = fs::read_to_string(&global).unwrap();
+    assert!(text.contains("[mux]"), "{text}");
+    assert!(!text.contains("[[repo]]"), "{text}");
+
+    // It refuses to clobber, and the workspace file stays minimal.
+    ws_with_global(&root, &global)
+        .args(["init", "--global"])
+        .assert()
+        .failure();
+
+    ws_with_global(&root, &global)
+        .args([
+            "init",
+            "--name",
+            "demo",
+            "--repo",
+            "git@example.com:org/api.git",
+        ])
+        .assert()
+        .success();
+    let local = fs::read_to_string(root.join("ws.toml")).unwrap();
+    assert!(local.contains("name = \"demo\""), "{local}");
+    // Only [[repo]] sections, and only as comments beyond that: the settings
+    // live in the global file, with the rest shown as commented examples.
+    let live_section = local
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with('[') && *line != "[[repo]]");
+    assert_eq!(
+        live_section, None,
+        "the workspace file should stay small:\n{local}"
+    );
+}
+
+#[test]
 fn init_writes_a_parseable_config() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().join("fresh");
@@ -469,6 +619,7 @@ fn init_writes_a_parseable_config() {
     Command::cargo_bin("ws")
         .unwrap()
         .current_dir(&root)
+        .env("WS_CONFIG", "")
         .arg("init")
         .assert()
         .failure();
@@ -476,6 +627,7 @@ fn init_writes_a_parseable_config() {
     Command::cargo_bin("ws")
         .unwrap()
         .current_dir(&root)
+        .env("WS_CONFIG", "")
         .args(["status"])
         .assert()
         .success();

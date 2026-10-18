@@ -41,7 +41,18 @@ fn run() -> Result<()> {
         inline: false,
         query: Vec::new(),
     }) {
-        Command::Init { name, repos, force } => cmd_init(&runner, &cwd, name, &repos, force),
+        Command::Init {
+            name,
+            repos,
+            global,
+            force,
+        } => {
+            if global {
+                cmd_init_global(&runner, force)
+            } else {
+                cmd_init(&runner, &cwd, name, &repos, force)
+            }
+        }
         Command::Fetch => {
             let ws = Workspace::discover(&cwd)?;
             workspace::fetch(&ws, &runner)
@@ -100,7 +111,7 @@ fn cmd_init(
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "ws".into())
     });
-    let text = config::template(&name, repos);
+    let text = config::local_template(&name, repos);
     if runner.dry_run {
         eprintln!("would write {}", path.display());
         print!("{text}");
@@ -113,6 +124,41 @@ fn cmd_init(
     } else {
         eprintln!("run `ws fetch` to clone them");
     }
+    match config::global_config_path() {
+        Some(global) if global.is_file() => {
+            eprintln!("settings come from {}", global.display())
+        }
+        Some(global) => eprintln!(
+            "settings use the built-in defaults; `ws init --global` writes {}",
+            global.display()
+        ),
+        None => {}
+    }
+    Ok(())
+}
+
+/// Write the documented settings file every workspace layers on top of.
+fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
+    let path = config::global_config_path()
+        .context("cannot locate a config directory — set WS_CONFIG or HOME")?;
+    if path.exists() && !force {
+        bail!(
+            "{} already exists — pass --force to overwrite",
+            path.display()
+        );
+    }
+    let text = config::global_template();
+    if runner.dry_run {
+        eprintln!("would write {}", path.display());
+        print!("{text}");
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
+    eprintln!("wrote {}", path.display());
     Ok(())
 }
 
@@ -236,6 +282,10 @@ fn cmd_status(runner: &Runner, cwd: &Path) -> Result<()> {
     let ws = Workspace::discover(cwd)?;
     println!("workspace  {}", ws.name());
     println!("root       {}", ws.root.display());
+    for (i, source) in ws.sources.iter().enumerate() {
+        let label = if i == 0 { "config" } else { "" };
+        println!("{label:<10} {}", source.display());
+    }
     println!(
         "layout     {} / {}",
         if ws.is_grouped() { "grouped" } else { "single" },

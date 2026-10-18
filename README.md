@@ -7,6 +7,7 @@ repository of a project, runs each repo's setup, and lays the result out in
 tmux or [herdr](https://herdr.dev).
 
 ```
+ws init --global                                   # once: your settings
 ws init --repo git@github.com:org/api.git --repo git@github.com:org/web.git
 ws fetch
 ws switch feature/JIRA-123
@@ -213,17 +214,40 @@ Every switch registers the branch directory and its worktrees with zoxide, so
 
 ## Configuration
 
-`ws init` writes a commented `ws.toml`. Every key has a default, so the minimum
-is one `[[repo]]` block:
+Settings live in one place for all your workspaces, at
+`~/.config/ws/config.toml` (`$XDG_CONFIG_HOME` is honoured; `WS_CONFIG` points
+somewhere else, and `WS_CONFIG=""` turns the layer off). `ws init --global`
+writes it with every key documented and its default filled in.
+
+A workspace's `ws.toml` then stays small — what it actually owns:
 
 ```toml
+name = "acme"
+branch_dirs = "nested"          # an override, when this project differs
+
 [[repo]]
 url = "git@github.com:org/api.git"
-setup = "pnpm install"        # or a list of commands; runs once per worktree
+setup = "pnpm install"          # or a list of commands; runs once per worktree
+
+[[repo]]
+url = "git@github.com:org/web.git"
+path = "services/web"           # where it sits inside a branch directory
 ```
 
-`bare_dir` and `worktree_dir` accept the same forms: `.` for the workspace
-root, a relative path, an absolute one, or `~`.
+Merging is key by key, not file by file: a workspace that sets one key of
+`[mux]` keeps the rest of your global `[mux]`. Arrays are replaced whole, never
+appended to. Repositories belong to the workspace — `[[repo]]` in the global
+file is an error rather than a silently ignored block. `ws status` prints the
+files a workspace was built from, in the order they were applied.
+
+TOML reads a bare key as part of the table above it, so single-key overrides
+go above the first `[[repo]]` and whole sections below the last one. The file
+`ws init` writes already offers them in the right places, commented out.
+
+`bare_dir` and `worktree_dir` accept `.` for the workspace root, a relative
+path, an absolute one, or `~`. They resolve per workspace, so an absolute
+`worktree_dir` in the *global* file would point every workspace at the same
+directory — set that one per workspace.
 
 Launcher commands are configurable, which is also how the tools are tested
 without installing them:
@@ -242,7 +266,7 @@ those at runtime.
 
 ```
 nix develop              # rustc, cargo, clippy, rustfmt, git, tmux, fzf, zoxide
-cargo test               # 48 unit + 11 end-to-end tests, no network
+cargo test               # 52 unit + 15 end-to-end tests, no network
 cargo clippy --all-targets -- -D warnings
 ```
 

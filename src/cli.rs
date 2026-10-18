@@ -59,7 +59,11 @@ pub enum Command {
         /// Repository URL; repeat for several repositories.
         #[arg(long = "repo", value_name = "URL")]
         repos: Vec<String>,
-        /// Overwrite an existing ws.toml.
+        /// Write the documented global settings file instead, at
+        /// ~/.config/ws/config.toml.
+        #[arg(long, conflicts_with_all = ["name", "repos"])]
+        global: bool,
+        /// Overwrite an existing file.
         #[arg(long)]
         force: bool,
     },

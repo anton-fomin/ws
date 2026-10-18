@@ -365,6 +365,8 @@ pub fn resolve_dir(root: &Path, value: &str) -> PathBuf {
 pub struct Workspace {
     pub root: PathBuf,
     pub config: Config,
+    /// Configuration files that went into `config`, least specific first.
+    pub sources: Vec<PathBuf>,
 }
 
 impl Workspace {
@@ -391,16 +393,46 @@ impl Workspace {
         )
     }
 
+    /// Load `ws.toml`, layered on top of the user's global configuration.
+    ///
+    /// Settings come from `~/.config/ws/config.toml`; the workspace file lists
+    /// the repositories and overrides whatever it needs to, key by key.
     pub fn load(root: &Path) -> Result<Workspace> {
         let path = root.join(CONFIG_FILE);
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("cannot read {}", path.display()))?;
-        let config: Config =
-            toml::from_str(&text).with_context(|| format!("cannot parse {}", path.display()))?;
+        let local = read_toml(&path)?;
+        let mut sources = Vec::new();
+
+        let merged = match global_config_path().filter(|p| p.is_file()) {
+            Some(global_path) => {
+                let global = read_toml(&global_path)?;
+                // Deserialize the global file on its own first, so an unknown
+                // or malformed key is reported against the file that holds it.
+                let standalone: Config = global
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("cannot parse {}", global_path.display()))?;
+                if !standalone.repos.is_empty() {
+                    bail!(
+                        "{}: repositories belong in a workspace's {CONFIG_FILE}, \
+                         not in the global configuration",
+                        global_path.display()
+                    );
+                }
+                sources.push(global_path);
+                merge_into(global, local)
+            }
+            None => local,
+        };
+        sources.push(path.clone());
+
+        let config: Config = merged
+            .try_into()
+            .with_context(|| format!("cannot parse {}", path.display()))?;
         config.validate(&path)?;
         Ok(Workspace {
             root: root.to_path_buf(),
             config,
+            sources,
         })
     }
 
@@ -501,6 +533,51 @@ impl Config {
     }
 }
 
+fn read_toml(path: &Path) -> Result<toml::Value> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("cannot parse {}", path.display()))
+}
+
+/// Path of the user's global configuration.
+///
+/// `WS_CONFIG` overrides it; setting it to the empty string turns the global
+/// layer off entirely, which is what the tests do so a developer's own file
+/// cannot reach them.
+pub fn global_config_path() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("WS_CONFIG") {
+        if explicit.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(explicit));
+    }
+    let base = match std::env::var_os("XDG_CONFIG_HOME") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+        _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+    };
+    Some(base.join("ws").join("config.toml"))
+}
+
+/// Lay `over` on top of `base`, one key at a time.
+///
+/// Tables merge so that a workspace setting one key of `[mux]` keeps the rest
+/// of the global `[mux]`. Everything else, arrays included, is replaced.
+fn merge_into(base: toml::Value, over: toml::Value) -> toml::Value {
+    match (base, over) {
+        (toml::Value::Table(mut base), toml::Value::Table(over)) => {
+            for (key, value) in over {
+                let merged = match base.remove(&key) {
+                    Some(existing) => merge_into(existing, value),
+                    None => value,
+                };
+                base.insert(key, merged);
+            }
+            toml::Value::Table(base)
+        }
+        (_, over) => over,
+    }
+}
+
 /// Follow a worktree's `.git` file back to the workspace that owns it.
 fn root_via_gitdir(start: &Path) -> Option<PathBuf> {
     let git_file = start
@@ -524,38 +601,32 @@ fn root_via_gitdir(start: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The commented `ws.toml` written by `ws init`. Hand-written on purpose:
-/// serializing the struct would drop every comment.
-pub fn template(name: &str, repos: &[String]) -> String {
-    let mut out = String::new();
-    out.push_str(&format!(
-        "# ws workspace configuration — see `ws --help`\n\
-         name = \"{name}\"\n\
+/// The `ws.toml` written by `ws init` — repositories and little else.
+///
+/// Settings live in the global configuration; a workspace only writes down
+/// what is actually its own, and overrides the rest key by key when it has to.
+pub fn local_template(name: &str, repos: &[String]) -> String {
+    // Order matters: in TOML a bare key belongs to the table above it, so the
+    // single-key overrides have to be offered before the first [[repo]] and
+    // the table overrides after the last one.
+    let mut out = format!(
+        "name = \"{name}\"\n\
          \n\
-         # Branch checked out by `ws fetch`.\n\
-         default_branch = \"main\"\n\
-         # What new branches fork from; omit to use each repo's own default branch.\n\
-         # base_branch = \"main\"\n\
-         \n\
-         # auto: one repo -> the branch directory is the worktree;\n\
-         #       several -> <branch>/<repo>/. Force with \"single\" or \"grouped\".\n\
-         repo_layout = \"auto\"\n\
-         # flat: feature/x -> feature-x   |   nested: feature/x -> feature/x\n\
-         branch_dirs = \"flat\"\n\
-         bare_dir = \".bare\"\n\
-         # Base directory the branch directories are created in. Relative to\n\
-         # this file, or absolute; \"~\" is expanded. \".\" is this directory.\n\
-         worktree_dir = \".\"\n\n"
-    ));
+         # Settings come from the global configuration, which `ws init --global`\n\
+         # writes with every key documented. Override single keys here, above\n\
+         # the repositories:\n\
+         # branch_dirs = \"nested\"\n\
+         # worktree_dir = \"~/trees/{name}\"\n\n"
+    );
 
     if repos.is_empty() {
         out.push_str(
-            "# One [[repo]] block per repository. `setup` runs once, in the new worktree.\n\
+            "# One [[repo]] block per repository.\n\
              # [[repo]]\n\
              # name = \"api\"\n\
              # url = \"git@github.com:org/api.git\"\n\
              # path = \"services/api\"   # where it sits inside a branch directory\n\
-             # setup = \"pnpm install\"\n\n",
+             # setup = \"pnpm install\"  # runs once, in each new worktree\n\n",
         );
     } else {
         for url in repos {
@@ -563,7 +634,6 @@ pub fn template(name: &str, repos: &[String]) -> String {
                 "[[repo]]\n\
                  name = \"{}\"\n\
                  url = \"{url}\"\n\
-                 # path = \"services/{0}\"\n\
                  # setup = \"pnpm install\"\n\n",
                 repo_name_from_url(url)
             ));
@@ -571,34 +641,66 @@ pub fn template(name: &str, repos: &[String]) -> String {
     }
 
     out.push_str(
-        "[mux]\n\
-         # auto | tmux | herdr | none\n\
-         backend = \"auto\"\n\
-         # placeholders: {workspace} {branch} {branch_raw}\n\
-         session = \"{workspace}-{branch}\"\n\
-         # shared window/pane for the branch directory; \"\" disables it\n\
-         root_window = \"ws\"\n\
-         # what to do with no multiplexer: print-path | nothing\n\
-         on_none = \"print-path\"\n\n\
-         [mux.tmux]\n\
-         layout = \"windows\"\n\
-         command = [\"tmux\"]\n\n\
-         [mux.herdr]\n\
-         split_direction = \"right\"\n\
-         command = [\"herdr\"]\n\
-         # command = [\"nix\", \"run\", \"nixpkgs#herdr\", \"--\"]\n\n\
-         [ui]\n\
-         # auto | popup | inline | none\n\
-         picker = \"auto\"\n\
-         picker_cmd = [\"fzf\"]\n\
-         popup = { width = \"80%\", height = \"60%\" }\n\n\
-         [zoxide]\n\
-         enabled = \"auto\"\n\
-         # worktrees | branch-dirs | both | none\n\
-         register = \"both\"\n\
-         command = [\"zoxide\"]\n",
+        "# Whole-section overrides belong below the repositories, for example:\n\
+         # [mux]\n\
+         # root_window = \"ws\"\n",
     );
     out
+}
+
+/// The commented settings file written by `ws init --global`. Hand-written on
+/// purpose: serializing the struct would drop every comment.
+pub fn global_template() -> String {
+    "# ws — global configuration, applied to every workspace.\n\
+     # A workspace's ws.toml lists the repositories and overrides any key here.\n\
+     \n\
+     # Branch checked out by `ws fetch`.\n\
+     default_branch = \"main\"\n\
+     # What new branches fork from; omit to use each repo's own default branch.\n\
+     # base_branch = \"main\"\n\
+     \n\
+     # auto: one repo -> the branch directory is the worktree;\n\
+     #       several -> <branch>/<repo>/. Force with \"single\" or \"grouped\".\n\
+     repo_layout = \"auto\"\n\
+     # flat: feature/x -> feature-x   |   nested: feature/x -> feature/x\n\
+     branch_dirs = \"flat\"\n\
+     # Both are resolved per workspace: relative to its ws.toml, or absolute\n\
+     # with \"~\" expanded. An absolute worktree_dir here would put every\n\
+     # workspace's branches in one directory, so set that one per workspace.\n\
+     bare_dir = \".bare\"\n\
+     worktree_dir = \".\"\n\
+     \n\
+     [mux]\n\
+     # auto | tmux | herdr | none\n\
+     backend = \"auto\"\n\
+     # placeholders: {workspace} {branch} {branch_raw}\n\
+     session = \"{workspace}-{branch}\"\n\
+     # shared window/pane for the branch directory; \"\" disables it\n\
+     root_window = \"ws\"\n\
+     # what to do with no multiplexer: print-path | nothing\n\
+     on_none = \"print-path\"\n\
+     \n\
+     [mux.tmux]\n\
+     layout = \"windows\"\n\
+     command = [\"tmux\"]\n\
+     \n\
+     [mux.herdr]\n\
+     split_direction = \"right\"\n\
+     command = [\"herdr\"]\n\
+     # command = [\"nix\", \"run\", \"nixpkgs#herdr\", \"--\"]\n\
+     \n\
+     [ui]\n\
+     # auto | popup | inline | none\n\
+     picker = \"auto\"\n\
+     picker_cmd = [\"fzf\"]\n\
+     popup = { width = \"80%\", height = \"60%\" }\n\
+     \n\
+     [zoxide]\n\
+     enabled = \"auto\"\n\
+     # worktrees | branch-dirs | both | none\n\
+     register = \"both\"\n\
+     command = [\"zoxide\"]\n"
+        .to_string()
 }
 
 #[cfg(test)]
@@ -725,12 +827,86 @@ mod tests {
     }
 
     #[test]
-    fn template_parses_back() {
-        let text = template("demo", &["git@github.com:org/api.git".into()]);
-        let cfg: Config = toml::from_str(&text).unwrap();
+    fn both_templates_parse_back() {
+        let local = local_template("demo", &["git@github.com:org/api.git".into()]);
+        let cfg: Config = toml::from_str(&local).unwrap();
         assert_eq!(cfg.name.as_deref(), Some("demo"));
         assert_eq!(cfg.repos.len(), 1);
         assert_eq!(cfg.repos[0].name(), "api");
         cfg.validate(Path::new("ws.toml")).unwrap();
+
+        let global: Config = toml::from_str(&global_template()).unwrap();
+        assert!(global.repos.is_empty(), "the global template has no repos");
+        global.validate(Path::new("config.toml")).unwrap();
+    }
+
+    #[test]
+    fn uncommenting_the_local_templates_hints_produces_valid_config() {
+        // A bare key after a [[repo]] header would land inside that repo, so
+        // the template has to offer its examples in workable positions.
+        let text = local_template("demo", &["git@github.com:org/api.git".into()]);
+        let uncommented: String = text
+            .lines()
+            .map(|line| match line.trim_start().strip_prefix("# ") {
+                // A commented example is a table header or a `key = value`;
+                // anything else in the template is prose and stays a comment.
+                Some(rest) if rest.starts_with('[') || rest.contains(" = ") => rest.to_string(),
+                _ => line.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cfg: Config = toml::from_str(&uncommented)
+            .unwrap_or_else(|e| panic!("{e}\n--- in ---\n{uncommented}"));
+        assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
+        assert_eq!(cfg.mux.root_window, "ws");
+        assert_eq!(cfg.repos.len(), 1);
+        cfg.validate(Path::new("ws.toml")).unwrap();
+    }
+
+    #[test]
+    fn the_local_template_carries_only_identity_and_repos() {
+        let text = local_template("demo", &["git@github.com:org/api.git".into()]);
+        let value: toml::Value = toml::from_str(&text).unwrap();
+        let keys: Vec<&str> = value
+            .as_table()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["name", "repo"]);
+    }
+
+    #[test]
+    fn merging_replaces_keys_and_keeps_the_rest_of_a_table() {
+        let global: toml::Value = toml::from_str(
+            "branch_dirs = \"nested\"\n\
+             [mux]\nbackend = \"herdr\"\nroot_window = \"ws\"\n\
+             [ui]\npicker_cmd = [\"fzf\", \"--border\"]\n",
+        )
+        .unwrap();
+        let local: toml::Value = toml::from_str(
+            "name = \"acme\"\n\
+             [mux]\nroot_window = \"acme\"\n\
+             [ui]\npicker_cmd = [\"sk\"]\n",
+        )
+        .unwrap();
+
+        let cfg: Config = merge_into(global, local).try_into().unwrap();
+        assert_eq!(cfg.name.as_deref(), Some("acme"));
+        // untouched by the workspace, so the global value survives
+        assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
+        assert_eq!(cfg.mux.backend, Backend::Herdr);
+        // overridden key by key, not table by table
+        assert_eq!(cfg.mux.root_window, "acme");
+        // arrays are replaced whole, never appended to
+        assert_eq!(cfg.ui.picker_cmd, ["sk"]);
+    }
+
+    #[test]
+    fn merging_an_empty_workspace_file_changes_nothing() {
+        let global: toml::Value = toml::from_str("branch_dirs = \"nested\"\n").unwrap();
+        let local: toml::Value = toml::from_str("").unwrap();
+        let cfg: Config = merge_into(global, local).try_into().unwrap();
+        assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
     }
 }
