@@ -207,7 +207,7 @@ mod tests {
         assert_eq!(h.list_cmd().unwrap().display(), "herdr workspace list");
         assert_eq!(
             h.create_cmd(&p).unwrap().display(),
-            "herdr workspace create --cwd /w/feature-x --label acme-feature-x"
+            "herdr workspace create --cwd /w/feature-x --label acme/feature-x"
         );
         assert_eq!(
             h.split_cmd("w1:p1", Path::new("/w/feature-x/api"))
@@ -297,11 +297,11 @@ mod tests {
         let list: Value = serde_json::from_str(
             r#"{"result":{"workspaces":[
                  {"workspace_id":"w1","label":"other"},
-                 {"workspace_id":"w2","label":"acme-feature-x"}]}}"#,
+                 {"workspace_id":"w2","label":"acme/feature-x"}]}}"#,
         )
         .unwrap();
         assert_eq!(
-            find_labelled_id(&list, "acme-feature-x", "workspace_id").as_deref(),
+            find_labelled_id(&list, "acme/feature-x", "workspace_id").as_deref(),
             Some("w2")
         );
         assert_eq!(find_labelled_id(&list, "missing", "workspace_id"), None);

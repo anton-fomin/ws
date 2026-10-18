@@ -111,7 +111,7 @@ mod tests {
 
     pub(crate) fn plan(root_window: Option<&str>, repos: &[&str]) -> SessionPlan {
         SessionPlan {
-            session: "acme-feature-x".into(),
+            session: "acme/feature-x".into(),
             root_dir: PathBuf::from("/w/feature-x"),
             root_window: root_window.map(str::to_string),
             entries: repos

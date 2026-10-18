@@ -200,10 +200,10 @@ mod tests {
         assert_eq!(
             cmds,
             [
-                "tmux new-session -d -s acme-feature-x -n ws -c /w/feature-x",
-                "tmux new-window -t '=acme-feature-x:' -n api -c /w/feature-x/api",
-                "tmux new-window -t '=acme-feature-x:' -n web -c /w/feature-x/web",
-                "tmux select-window -t '=acme-feature-x:^'",
+                "tmux new-session -d -s acme/feature-x -n ws -c /w/feature-x",
+                "tmux new-window -t '=acme/feature-x:' -n api -c /w/feature-x/api",
+                "tmux new-window -t '=acme/feature-x:' -n web -c /w/feature-x/web",
+                "tmux select-window -t '=acme/feature-x:^'",
             ]
         );
     }
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(cmds.len(), 2);
         assert_eq!(
             cmds[0].display(),
-            "tmux new-session -d -s acme-feature-x -n api -c /w/feature-x/api"
+            "tmux new-session -d -s acme/feature-x -n api -c /w/feature-x/api"
         );
     }
 
@@ -231,13 +231,13 @@ mod tests {
         assert_eq!(
             cmds,
             [
-                "tmux new-session -d -s acme-feature-x -n ws -c /w/feature-x",
-                "tmux set-option -t '=acme-feature-x' pane-border-status top",
-                "tmux select-pane -t '=acme-feature-x:' -T ws",
-                "tmux split-window -t '=acme-feature-x:' -c /w/feature-x/api",
-                "tmux select-pane -t '=acme-feature-x:' -T api",
-                "tmux select-layout -t '=acme-feature-x:' tiled",
-                "tmux select-pane -t '=acme-feature-x:.0'",
+                "tmux new-session -d -s acme/feature-x -n ws -c /w/feature-x",
+                "tmux set-option -t '=acme/feature-x' pane-border-status top",
+                "tmux select-pane -t '=acme/feature-x:' -T ws",
+                "tmux split-window -t '=acme/feature-x:' -c /w/feature-x/api",
+                "tmux select-pane -t '=acme/feature-x:' -T api",
+                "tmux select-layout -t '=acme/feature-x:' tiled",
+                "tmux select-pane -t '=acme/feature-x:.0'",
             ]
         );
     }

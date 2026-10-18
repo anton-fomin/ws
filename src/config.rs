@@ -133,7 +133,7 @@ impl Default for MuxConfig {
     fn default() -> Self {
         MuxConfig {
             backend: Backend::Auto,
-            session: "{workspace}-{branch}".into(),
+            session: "{workspace}/{branch}".into(),
             root_window: "ws".into(),
             on_none: OnNone::PrintPath,
             tmux: TmuxConfig::default(),
@@ -674,7 +674,7 @@ pub fn global_template() -> String {
      # auto | tmux | herdr | none\n\
      backend = \"auto\"\n\
      # placeholders: {workspace} {branch} {branch_raw}\n\
-     session = \"{workspace}-{branch}\"\n\
+     session = \"{workspace}/{branch}\"\n\
      # shared window/pane for the branch directory; \"\" disables it\n\
      root_window = \"ws\"\n\
      # what to do with no multiplexer: print-path | nothing\n\
@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(cfg.bare_dir, ".bare");
         assert_eq!(cfg.branch_dirs, BranchDirs::Flat);
         assert_eq!(cfg.repo_layout, RepoLayout::Auto);
-        assert_eq!(cfg.mux.session, "{workspace}-{branch}");
+        assert_eq!(cfg.mux.session, "{workspace}/{branch}");
         assert_eq!(cfg.mux.tmux.command, ["tmux"]);
         assert_eq!(cfg.ui.picker, PickerMode::Auto);
         assert_eq!(cfg.zoxide.register, Register::Both);

@@ -91,12 +91,16 @@ pub fn session_name(template: &str, workspace: &str, branch: &str, mode: BranchD
         .replace("{branch}", &flat)
 }
 
-/// tmux treats `.` and `:` specially in session names.
+/// Fold the characters tmux reads as target separators.
+///
+/// `:` separates session from window and `.` window from pane, so neither can
+/// survive in a session name. A slash is fine — tmux keeps it verbatim — which
+/// is what lets the default `{workspace}/{branch}` show up as written.
 pub fn sanitize_tmux_session(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| match c {
-            '.' | ':' | '/' | '\\' => '-',
+            '.' | ':' | '\\' => '-',
             c if c.is_control() => '-',
             c => c,
         })
@@ -183,12 +187,14 @@ mod tests {
     fn session_template_expands() {
         assert_eq!(
             session_name(
-                "{workspace}-{branch}",
+                "{workspace}/{branch}",
                 "acme",
                 "feature/x",
                 BranchDirs::Flat
             ),
-            "acme-feature-x"
+            // {branch} is the branch directory name, so the slash it folded
+            // stays folded; the one in the template is the template's own.
+            "acme/feature-x"
         );
         assert_eq!(
             session_name("{branch_raw}", "acme", "feature/x", BranchDirs::Flat),
@@ -197,8 +203,10 @@ mod tests {
     }
 
     #[test]
-    fn tmux_session_is_sanitized() {
-        assert_eq!(sanitize_tmux_session("acme.web:1/x"), "acme-web-1-x");
+    fn tmux_session_keeps_slashes_and_folds_separators() {
+        // ':' and '.' are tmux target separators; '/' is not.
+        assert_eq!(sanitize_tmux_session("acme.web:1/x"), "acme-web-1/x");
+        assert_eq!(sanitize_tmux_session("acme/feature-x"), "acme/feature-x");
         assert_eq!(sanitize_tmux_session(""), "ws");
     }
 

@@ -469,7 +469,7 @@ fn the_global_configuration_supplies_settings_and_the_workspace_overrides_them()
     fs::write(
         &global,
         "branch_dirs = \"nested\"\nworktree_dir = \"trees\"\n\
-         [mux]\nroot_window = \"shared\"\nsession = \"{workspace}/{branch}\"\n",
+         [mux]\nroot_window = \"shared\"\nsession = \"proj-{workspace}-{branch}\"\n",
     )
     .unwrap();
 
@@ -503,7 +503,10 @@ fn the_global_configuration_supplies_settings_and_the_workspace_overrides_them()
         .output()
         .unwrap();
     let text = String::from_utf8(status.stdout).unwrap();
-    assert!(text.contains("session    acme/feature-JIRA-123"), "{text}");
+    assert!(
+        text.contains("session    proj-acme-feature-JIRA-123"),
+        "{text}"
+    );
     // Both files are reported as sources.
     assert!(
         text.contains(&global.to_string_lossy().to_string()),
