@@ -74,6 +74,45 @@ Under Home Manager it is the same expression in `home.packages`.
 github:anton-fomin/ws/v0.2.0
 ```
 
+**In a project's dev shell**
+
+`ws` is normally a per-user tool, but putting it in a `devShell` pins one
+version for everyone working on the project:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    ws = {
+      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.2.0
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { nixpkgs, ws, ... }:
+    let
+      system = "x86_64-linux";
+      pkgs = nixpkgs.legacyPackages.${system};
+    in {
+      devShells.${system}.default = pkgs.mkShell {
+        packages = [
+          ws.packages.${system}.default
+          pkgs.git                              # required at runtime
+          pkgs.tmux pkgs.fzf pkgs.zoxide        # optional, see below
+        ];
+      };
+    };
+}
+```
+
+`nix develop` then has `ws` on `PATH`, and so do the tmux windows it opens
+from there. For several systems wrap the outputs in `nixpkgs.lib.genAttrs` —
+this repository's own `flake.nix` does exactly that.
+
+The shell is only as wide as the project, though: outside it `ws` is gone, and
+it cannot be what finds the *other* workspaces for `ws pick --global`. Install
+it per user too if you want it everywhere.
+
 **Runtime dependencies.** `ws` shells out rather than linking libraries, so the
 closure is just glibc — the tools it drives have to be on `PATH`:
 
