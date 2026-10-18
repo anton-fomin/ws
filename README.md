@@ -71,7 +71,7 @@ Under Home Manager it is the same expression in `home.packages`.
 **Pin to a release** by putting the tag in the URL:
 
 ```
-github:anton-fomin/ws/v0.1.0
+github:anton-fomin/ws/v0.2.0
 ```
 
 **Runtime dependencies.** `ws` shells out rather than linking libraries, so the
