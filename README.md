@@ -72,7 +72,7 @@ Under Home Manager it is the same expression in `home.packages`.
 **Pin to a release** by putting the tag in the URL:
 
 ```
-github:anton-fomin/ws/v0.2.0
+github:anton-fomin/ws/v0.3.0
 ```
 
 **In a project's dev shell**
@@ -85,7 +85,7 @@ version for everyone working on the project:
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     ws = {
-      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.2.0
+      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.3.0
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
