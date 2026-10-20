@@ -7,8 +7,8 @@ use std::process::{Command, Stdio};
 
 use crate::config::{PickerMode, Popup, Workspace};
 use crate::exec::{program_available, Cmd, Runner};
+use crate::integration::Zoxide;
 use crate::workspace;
-use crate::zoxide::Zoxide;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Candidate {

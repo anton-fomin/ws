@@ -1,4 +1,4 @@
-//! herdr backend: one workspace per branch, one pane per repository.
+//! herdr backend: one workspace per branch, one tab per repository.
 //!
 //! Command shapes verified against herdr 0.9.0 (`herdr <subcommand>` with no
 //! arguments prints the exact usage). Control commands answer with JSON and the
@@ -13,12 +13,13 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::Path;
 
-use crate::config::{Direction, HerdrConfig};
+use crate::config::{Direction, HerdrConfig, HerdrLayout};
 use crate::exec::{launcher_from_env, Cmd, Runner};
 use crate::mux::{inside_herdr, Mux, SessionPlan};
 
 pub struct Herdr {
     command: Vec<String>,
+    layout: HerdrLayout,
     direction: Direction,
     session: Option<String>,
     /// Running inside a herdr pane, where the session context is inherited.
@@ -29,6 +30,7 @@ impl Herdr {
     pub fn new(config: &HerdrConfig) -> Herdr {
         Herdr {
             command: launcher_from_env("WS_HERDR_CMD").unwrap_or_else(|| config.command.clone()),
+            layout: config.layout,
             direction: config.split_direction,
             session: config.session.clone(),
             inherits_context: inside_herdr(),
@@ -51,12 +53,33 @@ impl Herdr {
         Ok(self.base()?.args(["workspace", "list"]))
     }
 
+    /// The new workspace comes with one tab holding one pane, and that first
+    /// slot is what they stand for — the branch directory when there is a
+    /// shared window, the only repository when there is not.
     pub fn create_cmd(&self, plan: &SessionPlan) -> Result<Cmd> {
+        let cwd = plan
+            .slots()
+            .first()
+            .map(|slot| slot.path.clone())
+            .unwrap_or_else(|| plan.root_dir.clone());
         Ok(self
             .base()?
             .args(["workspace", "create", "--cwd"])
-            .path_arg(&plan.root_dir)
+            .path_arg(&cwd)
             .args(["--label", &plan.session]))
+    }
+
+    pub fn tab_create_cmd(&self, workspace: &str, cwd: &Path, label: &str) -> Result<Cmd> {
+        Ok(self
+            .base()?
+            .args(["tab", "create", "--workspace", workspace, "--cwd"])
+            .path_arg(cwd)
+            .args(["--label", label])
+            .arg("--no-focus"))
+    }
+
+    pub fn tab_rename_cmd(&self, tab: &str, label: &str) -> Result<Cmd> {
+        Ok(self.base()?.args(["tab", "rename", tab, label]))
     }
 
     pub fn split_cmd(&self, pane: &str, cwd: &Path) -> Result<Cmd> {
@@ -105,31 +128,52 @@ impl Mux for Herdr {
 
         let created = runner.capture_mut(
             &self.create_cmd(plan)?,
-            r#"{"result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"w1:p1"}}}"#,
+            r#"{"result":{"workspace":{"workspace_id":"w1"},"tab":{"tab_id":"w1:t1"},"root_pane":{"pane_id":"w1:p1"}}}"#,
         )?;
         let created: Value =
             serde_json::from_str(&created).context("herdr workspace create did not return JSON")?;
         let workspace_id = pick(&created, &["result", "workspace", "workspace_id"])
             .or_else(|| first_string(&created, "workspace_id"))
             .context("herdr workspace create did not report a workspace id")?;
-        let mut pane = pick(&created, &["result", "root_pane", "pane_id"])
-            .or_else(|| first_string(&created, "pane_id"))
-            .context("herdr workspace create did not report a pane id")?;
-
         let slots = plan.slots();
-        for (i, slot) in slots.iter().enumerate() {
-            if i > 0 {
-                let out = runner.capture_mut(
-                    &self.split_cmd(&pane, &slot.path)?,
-                    &format!(r#"{{"result":{{"pane":{{"pane_id":"w1:p{}"}}}}}}"#, i + 1),
-                )?;
-                let out: Value =
-                    serde_json::from_str(&out).context("herdr pane split did not return JSON")?;
-                pane = pick(&out, &["result", "pane", "pane_id"])
-                    .or_else(|| first_string(&out, "pane_id"))
-                    .context("herdr pane split did not report a pane id")?;
+        let Some((first, rest)) = slots.split_first() else {
+            return runner.run_quiet(&self.focus_cmd(&workspace_id)?);
+        };
+
+        match self.layout {
+            // The workspace already has the first slot's tab; the rest are
+            // created with their label, so none of them needs renaming.
+            HerdrLayout::Tabs => {
+                let tab = pick(&created, &["result", "tab", "tab_id"])
+                    .or_else(|| first_string(&created, "tab_id"))
+                    .context("herdr workspace create did not report a tab id")?;
+                runner.run_quiet(&self.tab_rename_cmd(&tab, &first.name)?)?;
+                for slot in rest {
+                    runner.run_quiet(&self.tab_create_cmd(
+                        &workspace_id,
+                        &slot.path,
+                        &slot.name,
+                    )?)?;
+                }
             }
-            runner.run_quiet(&self.rename_cmd(&pane, &slot.name)?)?;
+            HerdrLayout::Panes => {
+                let mut pane = pick(&created, &["result", "root_pane", "pane_id"])
+                    .or_else(|| first_string(&created, "pane_id"))
+                    .context("herdr workspace create did not report a pane id")?;
+                runner.run_quiet(&self.rename_cmd(&pane, &first.name)?)?;
+                for (i, slot) in rest.iter().enumerate() {
+                    let out = runner.capture_mut(
+                        &self.split_cmd(&pane, &slot.path)?,
+                        &format!(r#"{{"result":{{"pane":{{"pane_id":"w1:p{}"}}}}}}"#, i + 2),
+                    )?;
+                    let out: Value = serde_json::from_str(&out)
+                        .context("herdr pane split did not return JSON")?;
+                    pane = pick(&out, &["result", "pane", "pane_id"])
+                        .or_else(|| first_string(&out, "pane_id"))
+                        .context("herdr pane split did not report a pane id")?;
+                    runner.run_quiet(&self.rename_cmd(&pane, &slot.name)?)?;
+                }
+            }
         }
 
         runner.run_quiet(&self.focus_cmd(&workspace_id)?)
@@ -194,6 +238,7 @@ mod tests {
     fn herdr(session: Option<&str>) -> Herdr {
         Herdr {
             command: vec!["herdr".into()],
+            layout: HerdrLayout::Tabs,
             direction: Direction::Right,
             session: session.map(str::to_string),
             inherits_context: false,
@@ -218,6 +263,16 @@ mod tests {
         assert_eq!(
             h.rename_cmd("w1:p2", "api").unwrap().display(),
             "herdr pane rename w1:p2 api"
+        );
+        assert_eq!(
+            h.tab_create_cmd("w1", Path::new("/w/feature-x/api"), "api")
+                .unwrap()
+                .display(),
+            "herdr tab create --workspace w1 --cwd /w/feature-x/api --label api --no-focus"
+        );
+        assert_eq!(
+            h.tab_rename_cmd("w1:t1", "ws").unwrap().display(),
+            "herdr tab rename w1:t1 ws"
         );
         assert_eq!(
             h.focus_cmd("w1").unwrap().display(),
@@ -249,6 +304,7 @@ mod tests {
                 "nixpkgs#herdr".into(),
                 "--".into(),
             ],
+            layout: HerdrLayout::Panes,
             direction: Direction::Down,
             session: None,
             inherits_context: false,
@@ -264,6 +320,18 @@ mod tests {
                 .last()
                 .unwrap(),
             "--no-focus"
+        );
+    }
+
+    #[test]
+    fn a_single_repo_puts_the_first_tab_in_its_worktree() {
+        // With no shared window the only slot is the repository, and that is
+        // where the tab the workspace is born with belongs.
+        let h = herdr(None);
+        let p = plan(None, &["api"]);
+        assert_eq!(
+            h.create_cmd(&p).unwrap().display(),
+            "herdr workspace create --cwd /w/feature-x/api --label acme/feature-x"
         );
     }
 

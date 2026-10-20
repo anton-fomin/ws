@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{RepoConfig, Workspace};
 use crate::exec::Runner;
 use crate::git::{self, BranchSource};
+use crate::integration::{Local, PackageManagers};
+use crate::marker::{self, Marker};
 use crate::mux::{Entry, SessionPlan};
 use crate::paths;
 use crate::setup;
@@ -52,6 +54,35 @@ pub struct SwitchOptions {
     /// Run `setup` even for worktrees that already had it.
     pub rerun_setup: bool,
     pub skip_setup: bool,
+    /// Base for a branch that has to be created, overriding `base_branch`.
+    pub from: Option<Start>,
+    /// Branch whose worktrees a package manager integration seeds the new
+    /// ones from: the branch of the directory `ws switch` ran in. It falls
+    /// back to the default branch, so this may be `None`.
+    pub seed_from: Option<String>,
+}
+
+/// Where a branch that does not exist yet starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Start {
+    pub reference: String,
+    pub source: StartSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartSource {
+    /// `--from`: the user named it, so every repository has to have it.
+    Flag,
+    /// The branch of the directory `ws switch` ran in. Taken as the local
+    /// branch, which is what is actually in front of you — `origin/` may be
+    /// behind it — and a repository without it falls back to the base.
+    CurrentBranch,
+}
+
+impl Start {
+    fn is_flag(&self) -> bool {
+        self.source == StartSource::Flag
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +109,11 @@ pub fn switch(
 ) -> Result<Switched> {
     paths::validate_branch(branch)?;
     require_repos(ws)?;
+    if let Some(start) = &options.from {
+        // Before any worktree is created, so a ref that only some of the
+        // repositories have cannot leave the branch half made.
+        require_start(ws, runner, branch, start)?;
+    }
 
     let grouped = ws.is_grouped();
     let mode = ws.config.branch_dirs;
@@ -86,6 +122,22 @@ pub fn switch(
     let mut state = State::load(&ws.state_path())?;
     let mut worktrees = Vec::new();
     let mut created = Vec::new();
+    let mut started_from: Option<String> = None;
+    let managers = PackageManagers::new(&ws.config.integrations);
+    let local = Local::new(ws);
+    // With the branch directories in the workspace root, a branch can share
+    // its name with the local directory — and would be checked out into it.
+    if branch_dir == ws.local_dir()
+        && branch_dir.exists()
+        && !branch_dir.join(".git").exists()
+        && Marker::load(&branch_dir).is_none()
+    {
+        bail!(
+            "branch {branch} would be checked out into the local files directory {} — \
+             set integrations.local.dir to somewhere else",
+            branch_dir.display()
+        );
+    }
 
     for repo in &ws.config.repos {
         let name = repo.name();
@@ -109,7 +161,29 @@ pub fn switch(
                     other.display()
                 );
             }
-            let source = branch_source(runner, &bare, branch, ws.config.base_branch.as_deref());
+            let source = branch_source(
+                runner,
+                &bare,
+                &name,
+                branch,
+                options.from.as_ref(),
+                ws.config.base_branch.as_deref(),
+            );
+            if let Some(start) = &options.from {
+                if start.is_flag() && !matches!(source, BranchSource::New(_)) {
+                    eprintln!("warning: {name}: {branch} exists already, --from is not used");
+                }
+            }
+            if started_from.is_none() {
+                started_from = match &source {
+                    BranchSource::New(start) => Some(start.clone()),
+                    // The branch came from the remote, which is where it
+                    // started as far as this workspace is concerned.
+                    BranchSource::Track => Some(format!("origin/{branch}")),
+                    // It was already here: `ws` did not start it anywhere.
+                    BranchSource::Local => None,
+                };
+            }
             eprintln!("creating worktree {} ({name})", path.display());
             git::worktree_add(runner, &bare, &path, branch, &source)
                 .with_context(|| format!("cannot create worktree for {name}"))?;
@@ -122,6 +196,16 @@ pub fn switch(
             created.push(name.clone());
         }
 
+        // The local files first — an `.npmrc` may be what lets the install
+        // reach its registry — then the dependencies, then whatever else the
+        // repository needs: a `setup` command is written against a worktree
+        // it can build in.
+        if !options.skip_setup {
+            local.place(runner, repo, &path, created.contains(&name));
+            let seeds = seed_worktrees(ws, options.seed_from.as_deref(), repo, &path);
+            managers.prepare(runner, &name, &path, &seeds, options.rerun_setup);
+        }
+
         // Setup runs once per worktree; a missing marker also means "not yet run",
         // so an interrupted first switch recovers on the next one.
         let commands = repo.setup_commands();
@@ -129,7 +213,14 @@ pub fn switch(
             && !commands.is_empty()
             && (options.rerun_setup || !state.setup_done(branch, &name))
         {
-            setup::run(runner, &path, &name, &commands)?;
+            let context = setup::Context {
+                root: &ws.root,
+                branch,
+                branch_dir: &branch_dir,
+                worktree: &path,
+                repo: &name,
+            };
+            setup::run(runner, &context, &commands)?;
             state.mark_setup_done(branch, &name);
         }
 
@@ -137,6 +228,7 @@ pub fn switch(
     }
 
     if !runner.dry_run {
+        mark_branch_dir(ws, branch, &branch_dir, started_from)?;
         state.save(&ws.state_path())?;
     }
 
@@ -146,6 +238,40 @@ pub fn switch(
         worktrees,
         created,
     })
+}
+
+/// Worktrees of `repo` a new one's dependencies can be hard-linked from, in
+/// the order they are tried: the branch `ws switch` ran in, then the default
+/// branch.
+///
+/// The branch you came from first, because it is the one whose dependencies
+/// are most likely to be the ones the new branch wants — a branch forked from
+/// it resolves the same lockfile. The default branch is the fallback for a
+/// switch from anywhere else.
+fn seed_worktrees(
+    ws: &Workspace,
+    seed_from: Option<&str>,
+    repo: &RepoConfig,
+    target: &Path,
+) -> Vec<PathBuf> {
+    let base = ws.worktree_root();
+    let mode = ws.config.branch_dirs;
+    let grouped = ws.is_grouped();
+    let mut seeds = Vec::new();
+
+    for branch in seed_from
+        .into_iter()
+        .chain([ws.config.default_branch.as_str()])
+    {
+        if paths::validate_branch(branch).is_err() {
+            continue;
+        }
+        let path = paths::worktree_path(&base, branch, mode, grouped, &repo.dir());
+        if path != target && !seeds.contains(&path) && path.is_dir() {
+            seeds.push(path);
+        }
+    }
+    seeds
 }
 
 /// Another worktree of the same bare repo already holds this branch.
@@ -165,17 +291,108 @@ fn checked_out_elsewhere(
 }
 
 /// Local branch, remote branch to track, or a new branch off the base ref.
-fn branch_source(runner: &Runner, bare: &Path, branch: &str, base: Option<&str>) -> BranchSource {
+/// Leave the marker that makes this a branch directory — written once, by
+/// the call that created it, so what the branch started from is not rewritten
+/// by a later switch that re-creates one repository's worktree.
+///
+/// Only where the branch directory holds the repositories rather than *being*
+/// one. With a single repository it is that repository's working tree, and a
+/// file of `ws`'s there is a file in the user's project: `git add .` commits
+/// it, `git status` reports it, and keeping it quiet would mean writing into
+/// git's own directory or into the project's `.gitignore` — neither of which
+/// is `ws`'s to touch. Nothing is lost by leaving it out: a worktree already
+/// says which branch it is on, and [`current_branch_name`] asks it.
+fn mark_branch_dir(
+    ws: &Workspace,
+    branch: &str,
+    branch_dir: &Path,
+    from: Option<String>,
+) -> Result<()> {
+    if !ws.is_grouped() || Marker::load(branch_dir).is_some() {
+        return Ok(());
+    }
+    Marker {
+        branch: branch.to_string(),
+        from,
+    }
+    .save(branch_dir)
+}
+
+/// Every repository has to be able to reach an explicit `--from`, or the
+/// branch would mean something different in each of them.
+fn require_start(ws: &Workspace, runner: &Runner, branch: &str, start: &Start) -> Result<()> {
+    if !start.is_flag() {
+        return Ok(());
+    }
+    let grouped = ws.is_grouped();
+    let mode = ws.config.branch_dirs;
+    let base = ws.worktree_root();
+    let mut missing = Vec::new();
+
+    for repo in &ws.config.repos {
+        let bare = ensure_bare(ws, runner, repo)?;
+        let path = paths::worktree_path(&base, branch, mode, grouped, &repo.dir());
+        // Nothing is created where the worktree is already there, or where
+        // the branch exists and is checked out or tracked instead.
+        if path.join(".git").exists()
+            || git::local_branch_exists(runner, &bare, branch)
+            || git::remote_branch_exists(runner, &bare, branch)
+        {
+            continue;
+        }
+        if resolve_ref(runner, &bare, start).is_none() {
+            missing.push(repo.name());
+        }
+    }
+
+    if !missing.is_empty() {
+        bail!(
+            "--from {} is not in {} — fetch it, or name a ref every repository has",
+            start.reference,
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn branch_source(
+    runner: &Runner,
+    bare: &Path,
+    repo: &str,
+    branch: &str,
+    from: Option<&Start>,
+    base: Option<&str>,
+) -> BranchSource {
     if git::local_branch_exists(runner, bare, branch) {
         return BranchSource::Local;
     }
     if git::remote_branch_exists(runner, bare, branch) {
         return BranchSource::Track;
     }
-    BranchSource::New(resolve_base(runner, bare, base))
+    BranchSource::New(resolve_base(runner, bare, repo, from, base))
 }
 
-fn resolve_base(runner: &Runner, bare: &Path, base: Option<&str>) -> String {
+/// What a new branch starts from: `--from` when it names something this
+/// repository has, then `base_branch`, then the repository's own default.
+fn resolve_base(
+    runner: &Runner,
+    bare: &Path,
+    repo: &str,
+    from: Option<&Start>,
+    base: Option<&str>,
+) -> String {
+    if let Some(start) = from {
+        if let Some(resolved) = resolve_ref(runner, bare, start) {
+            return resolved;
+        }
+        // An explicit `--from` never gets here: it is checked against every
+        // repository first. The branch of the current directory does, and a
+        // repository that has never seen it starts from the base instead.
+        eprintln!(
+            "warning: {repo}: {} is not here, starting from the base branch",
+            start.reference
+        );
+    }
     if let Some(base) = base {
         if git::remote_branch_exists(runner, bare, base) {
             return format!("origin/{base}");
@@ -275,6 +492,224 @@ pub fn available_branches(ws: &Workspace, runner: &Runner) -> Result<Vec<String>
     Ok(all)
 }
 
+/// `--from` as this repository can reach it: `origin/x` as written, a branch
+/// name as the remote one when there is one, and anything else — a tag, a
+/// commit, `HEAD~2` — as given.
+fn resolve_ref(runner: &Runner, bare: &Path, start: &Start) -> Option<String> {
+    let reference = start.reference.as_str();
+    if let Some(branch) = reference.strip_prefix("origin/") {
+        return git::remote_branch_exists(runner, bare, branch).then(|| reference.to_string());
+    }
+    let local = git::local_branch_exists(runner, bare, reference);
+    if local && !start.is_flag() {
+        return Some(reference.to_string());
+    }
+    if git::remote_branch_exists(runner, bare, reference) {
+        return Some(format!("origin/{reference}"));
+    }
+    if local {
+        return Some(reference.to_string());
+    }
+    git::rev_exists(runner, bare, reference).then(|| reference.to_string())
+}
+
+/// The branch directory the path is inside, read from the marker it carries:
+/// walking up from the path, no git, no listing of worktrees.
+///
+/// The marker has to name the directory it is in — a branch directory of
+/// *this* workspace, at the place that branch belongs — so a stray `.ws.yaml`
+/// somewhere in a repository's own files cannot pass for one.
+pub fn current_branch_dir(ws: &Workspace, path: &Path) -> Option<(PathBuf, Marker)> {
+    let (dir, marker) = Marker::find_upward(path)?;
+    let expected = paths::branch_dir(&ws.worktree_root(), &marker.branch, ws.config.branch_dirs);
+    (expected == dir).then_some((dir, marker))
+}
+
+/// The branch of the directory `path` sits in, found by walking up from it.
+///
+/// Two markers do that, and git has the last word in both cases, since a
+/// worktree can be moved to another branch after `ws` made it:
+///
+/// * the `.ws.yaml` of a branch directory that holds repositories,
+/// * the `.git` of a worktree, which is what a branch directory is when there
+///   is only one repository — and what the path passes through anyway when it
+///   is inside one of several.
+///
+/// A branch directory from a `ws` that predates the marker still answers
+/// through the second of those, or through the worktree listing.
+pub fn current_branch_name(ws: &Workspace, runner: &Runner, path: &Path) -> Option<String> {
+    if let Some((dir, marker)) = current_branch_dir(ws, path) {
+        let base = ws.worktree_root();
+        for repo in &ws.config.repos {
+            let worktree = paths::worktree_path(
+                &base,
+                &marker.branch,
+                ws.config.branch_dirs,
+                ws.is_grouped(),
+                &repo.dir(),
+            );
+            if worktree.join(".git").exists() {
+                if let Some(branch) = git::current_branch(runner, &worktree) {
+                    return Some(branch);
+                }
+            }
+        }
+        let _ = dir;
+        return Some(marker.branch);
+    }
+
+    if let Some(worktree) = nearest_worktree(ws, path) {
+        if let Some(branch) = git::current_branch(runner, &worktree) {
+            return Some(branch);
+        }
+    }
+
+    current_branch(ws, runner, path)?.branch
+}
+
+/// Nearest worktree at or above `path`, as long as it is one this workspace
+/// keeps its branches in.
+fn nearest_worktree(ws: &Workspace, path: &Path) -> Option<PathBuf> {
+    let base = ws.worktree_root();
+    let mut dir = Some(path);
+    while let Some(current) = dir {
+        if !current.starts_with(&base) {
+            return None;
+        }
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// The branch directory the path is inside, with the repositories in it —
+/// read back from git, which is what `ws status` reports.
+pub fn current_branch(ws: &Workspace, runner: &Runner, path: &Path) -> Option<BranchStatus> {
+    list(ws, runner, false)
+        .ok()?
+        .into_iter()
+        .find(|entry| path.starts_with(&entry.dir))
+}
+
+/// Every tag and branch of the workspace, deduplicated, as `--from` takes
+/// them. The `origin/` forms are only offered once that prefix is typed:
+/// they are the same branches again, and double the list for nothing.
+pub fn ref_choices(ws: &Workspace, runner: &Runner, word: &str) -> Result<Vec<BranchChoice>> {
+    if let Some(typed) = word.strip_prefix("origin/") {
+        let _ = typed;
+        let mut remote = Vec::new();
+        for repo in &ws.config.repos {
+            let bare = ws.bare_path(repo);
+            if !bare.exists() {
+                continue;
+            }
+            for branch in git::remote_branches(runner, &bare)? {
+                let name = format!("origin/{branch}");
+                match remote
+                    .iter_mut()
+                    .find(|c: &&mut BranchChoice| c.branch == name)
+                {
+                    Some(choice) => choice.repos.push(repo.name()),
+                    None => remote.push(BranchChoice {
+                        branch: name,
+                        kind: ChoiceKind::Branch,
+                        repos: vec![repo.name()],
+                    }),
+                }
+            }
+        }
+        remote.sort_by(|a, b| a.branch.cmp(&b.branch));
+        return Ok(remote);
+    }
+
+    let mut choices = branch_choices(ws, runner)?;
+    let branches = choices.len();
+    for repo in &ws.config.repos {
+        let bare = ws.bare_path(repo);
+        if !bare.exists() {
+            continue;
+        }
+        for tag in git::tags(runner, &bare)? {
+            match choices[branches..].iter_mut().find(|c| c.branch == tag) {
+                Some(choice) => choice.repos.push(repo.name()),
+                None => choices.push(BranchChoice {
+                    branch: tag,
+                    kind: ChoiceKind::Tag,
+                    repos: vec![repo.name()],
+                }),
+            }
+        }
+    }
+    choices[branches..].sort_by(|a, b| a.branch.cmp(&b.branch));
+    Ok(choices)
+}
+
+/// A branch or tag `ws switch` could be given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchChoice {
+    pub branch: String,
+    pub kind: ChoiceKind,
+    /// Repositories it is in, or the ones with a worktree for it.
+    pub repos: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceKind {
+    /// A branch with a worktree in this workspace.
+    CheckedOut,
+    Branch,
+    Tag,
+}
+
+/// Every branch of the workspace, deduplicated across its repositories: the
+/// ones with worktrees first, then the `origin/*` branches without — the same
+/// two sources, in the same order, as the fzf picker.
+pub fn branch_choices(ws: &Workspace, runner: &Runner) -> Result<Vec<BranchChoice>> {
+    let mut choices: Vec<BranchChoice> = Vec::new();
+    for entry in list(ws, runner, false)? {
+        let Some(branch) = entry.branch else {
+            continue;
+        };
+        if choices.iter().any(|c| c.branch == branch) {
+            continue;
+        }
+        choices.push(BranchChoice {
+            branch,
+            kind: ChoiceKind::CheckedOut,
+            repos: entry.repos.into_iter().map(|r| r.name).collect(),
+        });
+    }
+
+    let checked_out = choices.len();
+    for repo in &ws.config.repos {
+        let bare = ws.bare_path(repo);
+        if !bare.exists() {
+            continue;
+        }
+        for branch in git::remote_branches(runner, &bare)? {
+            if choices[..checked_out].iter().any(|c| c.branch == branch) {
+                continue;
+            }
+            match choices[checked_out..]
+                .iter_mut()
+                .find(|c| c.branch == branch)
+            {
+                Some(choice) => choice.repos.push(repo.name()),
+                None => choices.push(BranchChoice {
+                    branch,
+                    kind: ChoiceKind::Branch,
+                    repos: vec![repo.name()],
+                }),
+            }
+        }
+    }
+
+    choices[checked_out..].sort_by(|a, b| a.branch.cmp(&b.branch));
+    Ok(choices)
+}
+
 pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Result<Switched> {
     paths::validate_branch(branch)?;
     let grouped = ws.is_grouped();
@@ -298,6 +733,13 @@ pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Res
             "uncommitted changes in {} — commit them or pass --force",
             dirty.join(", ")
         );
+    }
+
+    // Before git is asked to remove anything: with a single repository the
+    // marker lies inside the worktree, where it would both count as an
+    // untracked file and keep the directory from being removed.
+    if !runner.dry_run {
+        let _ = std::fs::remove_file(branch_dir.join(marker::BRANCH_FILE));
     }
 
     for (repo, path) in &worktrees {

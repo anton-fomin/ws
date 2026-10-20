@@ -98,7 +98,7 @@ impl Zoxide {
     }
 }
 
-/// Keep only the listed directories that hold a `ws.toml`.
+/// Keep only the listed directories that hold a `ws.yaml`.
 fn filter_workspace_roots(list: &str) -> Vec<PathBuf> {
     let mut seen = std::collections::HashSet::new();
     list.lines()

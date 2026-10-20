@@ -150,6 +150,32 @@ pub fn remote_branches(runner: &Runner, bare: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Tag names of the repository.
+pub fn tags(runner: &Runner, bare: &Path) -> Result<Vec<String>> {
+    let out = runner.capture(&git(bare).args([
+        "for-each-ref",
+        "--format=%(refname:strip=2)",
+        "refs/tags",
+    ]))?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Whether `rev` names something this repository can start a branch from —
+/// a tag, a commit, `HEAD~2`, a ref of another remote.
+pub fn rev_exists(runner: &Runner, bare: &Path, rev: &str) -> bool {
+    runner.ok(&git(bare).args([
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        &format!("{rev}^{{commit}}"),
+    ]))
+}
+
 /// How the branch should be created when adding a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BranchSource {
@@ -221,9 +247,18 @@ pub fn set_upstream(runner: &Runner, worktree: &Path, branch: &str) -> Result<()
     ]))
 }
 
+/// Whether the worktree has anything of the user's in it.
+///
+/// `ws`'s own branch marker does not count: with a single repository the
+/// branch directory is the worktree, so the marker sits among the files
+/// there, and it is not a reason to call the worktree dirty or to refuse to
+/// remove it.
 pub fn is_dirty(runner: &Runner, worktree: &Path) -> bool {
+    let marker = format!("?? {}", crate::marker::BRANCH_FILE);
     match runner.try_capture(&git(worktree).args(["status", "--porcelain"])) {
-        Ok(Some(out)) => !out.trim().is_empty(),
+        Ok(Some(out)) => out
+            .lines()
+            .any(|line| !line.trim().is_empty() && line.trim() != marker),
         _ => false,
     }
 }

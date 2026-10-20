@@ -18,6 +18,8 @@ pub struct Cmd {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Added to the environment the command inherits.
+    pub env: Vec<(String, String)>,
 }
 
 impl Cmd {
@@ -31,6 +33,7 @@ impl Cmd {
             program: program.clone(),
             args: fixed.to_vec(),
             cwd: None,
+            env: Vec::new(),
         })
     }
 
@@ -39,6 +42,7 @@ impl Cmd {
             program: program.into(),
             args: Vec::new(),
             cwd: None,
+            env: Vec::new(),
         }
     }
 
@@ -66,6 +70,11 @@ impl Cmd {
         self
     }
 
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.env.push((key.into(), value.into()));
+        self
+    }
+
     /// Shell-quoted rendering, used by `--dry-run` and error messages.
     pub fn display(&self) -> String {
         let mut parts = Vec::with_capacity(self.args.len() + 1);
@@ -80,6 +89,7 @@ impl Cmd {
         if let Some(dir) = &self.cwd {
             c.current_dir(dir);
         }
+        c.envs(self.env.iter().map(|(k, v)| (k, v)));
         c
     }
 

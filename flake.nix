@@ -16,12 +16,32 @@
           cargoLock.lockFile = ./Cargo.lock;
           # The end-to-end tests build fixture repositories with git.
           nativeCheckInputs = [ pkgs.git ];
+
+          nativeBuildInputs = [ pkgs.installShellFiles ];
+          # `ws completions` prints the script, so the binary itself is the
+          # source of truth — skipped when it cannot run on the build machine.
+          postInstall = pkgs.lib.optionalString
+            (pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform) ''
+              installShellCompletion --cmd ws \
+                --bash <($out/bin/ws completions bash) \
+                --zsh  <($out/bin/ws completions zsh) \
+                --fish <($out/bin/ws completions fish)
+            '';
         };
       });
 
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [ rustc cargo clippy rustfmt git tmux fzf zoxide ];
+
+          # Completion for the `ws` in the working tree, built on demand so
+          # that entering the shell stays cheap:
+          #   eval "$(ws-completions zsh)"
+          shellHook = ''
+            ws-completions() {
+              cargo run --quiet -- completions "''${1:-bash}"
+            }
+          '';
         };
       });
     };

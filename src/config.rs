@@ -1,11 +1,12 @@
-//! `ws.toml` parsing, defaults and workspace discovery.
+//! `ws.yaml` parsing, defaults and workspace discovery.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use serde_yaml_ng::{Mapping, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub const CONFIG_FILE: &str = "ws.toml";
+pub const CONFIG_FILE: &str = "ws.yaml";
 pub const STATE_DIR: &str = ".ws";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,14 +29,14 @@ pub struct Config {
     /// workspace root, or absolute; `~` is expanded.
     #[serde(default = "def_worktree_dir")]
     pub worktree_dir: String,
-    #[serde(default, rename = "repo")]
+    #[serde(default)]
     pub repos: Vec<RepoConfig>,
     #[serde(default)]
     pub mux: MuxConfig,
     #[serde(default)]
     pub ui: UiConfig,
     #[serde(default)]
-    pub zoxide: ZoxideConfig,
+    pub integrations: Integrations,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,6 +188,8 @@ pub enum TmuxLayout {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct HerdrConfig {
+    pub layout: HerdrLayout,
+    /// Only read by the `panes` layout.
     pub split_direction: Direction,
     /// Named herdr session; only passed when running from outside herdr.
     pub session: Option<String>,
@@ -196,11 +199,22 @@ pub struct HerdrConfig {
 impl Default for HerdrConfig {
     fn default() -> Self {
         HerdrConfig {
+            layout: HerdrLayout::Tabs,
             split_direction: Direction::Right,
             session: None,
             command: vec!["herdr".into()],
         }
     }
+}
+
+/// How the repositories of a branch are laid out inside the herdr workspace —
+/// the counterpart of `[mux.tmux] layout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum HerdrLayout {
+    #[default]
+    Tabs,
+    Panes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -262,6 +276,212 @@ impl Default for Popup {
             height: "60%".into(),
         }
     }
+}
+
+/// The tools `ws` drives around a workspace, each under its own key.
+///
+/// Every one of them resolves `enabled: auto` against whether its program is
+/// actually on `PATH`, so a workspace picks up what the machine has without
+/// being told, and `enabled: false` opts out.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Integrations {
+    pub zoxide: ZoxideConfig,
+    pub local: LocalConfig,
+    pub yarn: PackageManagerConfig,
+    pub pnpm: PackageManagerConfig,
+    pub npm: PackageManagerConfig,
+    pub uv: PackageManagerConfig,
+}
+
+impl Integrations {
+    /// The package managers, each paired with the key it is configured under.
+    /// The order is the one detection falls back to when a repository holds
+    /// more than one lockfile.
+    pub fn package_managers(&self) -> [(Manager, &PackageManagerConfig); 4] {
+        [
+            (Manager::Yarn, &self.yarn),
+            (Manager::Pnpm, &self.pnpm),
+            (Manager::Npm, &self.npm),
+            (Manager::Uv, &self.uv),
+        ]
+    }
+}
+
+/// A package manager `ws` knows how to drive.
+///
+/// What varies between them is held here rather than in the configuration, so
+/// a workspace only writes down what it wants to differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Manager {
+    Yarn,
+    Pnpm,
+    Npm,
+    Uv,
+}
+
+impl Manager {
+    /// Every manager, in the order detection prefers them.
+    pub const ALL: [Manager; 4] = [Manager::Yarn, Manager::Pnpm, Manager::Npm, Manager::Uv];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Manager::Yarn => "yarn",
+            Manager::Pnpm => "pnpm",
+            Manager::Npm => "npm",
+            Manager::Uv => "uv",
+        }
+    }
+
+    /// Directory the dependencies land in, relative to the project.
+    pub fn dependency_dir(self) -> &'static str {
+        match self {
+            Manager::Uv => ".venv",
+            _ => "node_modules",
+        }
+    }
+
+    /// Files that mark a project as this manager's. The first one found wins,
+    /// so the more specific name comes first.
+    pub fn lockfiles(self) -> &'static [&'static str] {
+        match self {
+            Manager::Yarn => &["yarn.lock"],
+            Manager::Pnpm => &["pnpm-lock.yaml"],
+            Manager::Npm => &["package-lock.json", "npm-shrinkwrap.json"],
+            Manager::Uv => &["uv.lock", "pyproject.toml"],
+        }
+    }
+
+    /// The three that share `node_modules` and a `package.json`, and so are
+    /// alternatives to one another rather than independent integrations.
+    pub fn is_node(self) -> bool {
+        !matches!(self, Manager::Uv)
+    }
+
+    /// Whether the dependency directory can be seeded from another worktree by
+    /// hard-linking it at all. A virtualenv cannot: `pyvenv.cfg` and the
+    /// shebangs in `bin/` carry the absolute path of the directory it was
+    /// created in, so a copy of it points back at the original.
+    pub fn links(self) -> bool {
+        self.is_node()
+    }
+
+    /// Whether seeding is worth doing by default.
+    ///
+    /// `npm ci` deletes `node_modules` before it starts — that is what makes
+    /// it reproducible — so seeding one for it is work thrown away. It is
+    /// only turned off, not ruled out: a workspace that would rather have the
+    /// speed sets `install: [install]` and `link: true` and gets both.
+    pub fn seeds_by_default(self) -> bool {
+        self.links() && self != Manager::Npm
+    }
+
+    /// Environment variable that overrides the launcher, like `WS_ZOXIDE_CMD`.
+    pub fn command_env(self) -> &'static str {
+        match self {
+            Manager::Yarn => "WS_YARN_CMD",
+            Manager::Pnpm => "WS_PNPM_CMD",
+            Manager::Npm => "WS_NPM_CMD",
+            Manager::Uv => "WS_UV_CMD",
+        }
+    }
+}
+
+/// One package manager's settings. Every key is optional and falls back to
+/// what [`Manager`] says, so `yarn: { enabled: false }` is a complete entry.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PackageManagerConfig {
+    pub enabled: Toggle,
+    /// Launcher; defaults to the manager's own name.
+    pub command: Option<Vec<String>>,
+    /// Arguments that install the dependencies. Left out, each manager gets
+    /// the ones that hold it to its lockfile — see
+    /// [`crate::integration::pm::default_install_args`], which resolves them
+    /// against the worktree because yarn's depend on its version.
+    pub install: Option<Vec<String>>,
+    /// Seed a new worktree's dependency directory from an existing one.
+    /// Ignored by a manager that cannot be seeded that way.
+    pub link: Option<bool>,
+}
+
+impl PackageManagerConfig {
+    pub fn command(&self, manager: Manager) -> Vec<String> {
+        match &self.command {
+            Some(command) => command.clone(),
+            None => vec![manager.name().to_string()],
+        }
+    }
+
+    pub fn link(&self, manager: Manager) -> bool {
+        manager.links() && self.link.unwrap_or(manager.seeds_by_default())
+    }
+}
+
+/// Untracked files kept beside the workspace — `.env`, editor settings, a
+/// personal `Makefile.local` — and placed into every worktree.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LocalConfig {
+    /// `auto` means: whenever `dir` exists.
+    pub enabled: Toggle,
+    /// Where the files are kept, resolved like `bare_dir`. With several repos
+    /// it holds one subdirectory per repo, named after it.
+    pub dir: String,
+    /// Rules matched in order against each entry's path relative to the
+    /// repo's local directory; the first one that matches decides how it is
+    /// placed, and an entry no rule matches is left out.
+    pub paths: Vec<LocalPath>,
+}
+
+impl Default for LocalConfig {
+    fn default() -> Self {
+        LocalConfig {
+            enabled: Toggle::default(),
+            dir: def_local_dir(),
+            paths: vec![LocalPath::default()],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LocalPath {
+    /// Regular expression the whole relative path has to match, with `/`
+    /// between its components.
+    pub pattern: String,
+    pub mode: LocalMode,
+}
+
+impl Default for LocalPath {
+    fn default() -> Self {
+        LocalPath {
+            pattern: ".*".into(),
+            mode: LocalMode::Link,
+        }
+    }
+}
+
+impl LocalPath {
+    /// The pattern, anchored at both ends: `.env` means `.env`, not every
+    /// path with `.env` somewhere in it.
+    pub fn regex(&self) -> Result<regex::Regex, regex::Error> {
+        regex::Regex::new(&format!("^(?:{})$", self.pattern))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LocalMode {
+    /// A symlink to the file in the local directory: one file, shared by
+    /// every worktree, edited in one place.
+    #[default]
+    Link,
+    /// An independent copy per worktree.
+    Copy,
+    /// A hard link: shared like `link`, but a real file to tools that refuse
+    /// to follow a symlink. An editor that saves by renaming breaks it.
+    Hardlink,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -334,6 +554,10 @@ fn def_worktree_dir() -> String {
     ".".into()
 }
 
+fn def_local_dir() -> String {
+    "local".into()
+}
+
 /// Resolve a configured directory against the workspace root.
 ///
 /// `.` and the empty string mean the root itself; `~` is expanded from $HOME;
@@ -370,7 +594,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Walk up from `start` looking for `ws.toml`.
+    /// Walk up from `start` looking for `ws.yaml`.
     pub fn discover(start: &Path) -> Result<Workspace> {
         let start = start
             .canonicalize()
@@ -393,23 +617,21 @@ impl Workspace {
         )
     }
 
-    /// Load `ws.toml`, layered on top of the user's global configuration.
+    /// Load `ws.yaml`, layered on top of the user's global configuration.
     ///
-    /// Settings come from `~/.config/ws/config.toml`; the workspace file lists
+    /// Settings come from `~/.config/ws/config.yaml`; the workspace file lists
     /// the repositories and overrides whatever it needs to, key by key.
     pub fn load(root: &Path) -> Result<Workspace> {
         let path = root.join(CONFIG_FILE);
-        let local = read_toml(&path)?;
+        let local = read_yaml(&path)?;
         let mut sources = Vec::new();
 
         let merged = match global_config_path().filter(|p| p.is_file()) {
             Some(global_path) => {
-                let global = read_toml(&global_path)?;
+                let global = read_yaml(&global_path)?;
                 // Deserialize the global file on its own first, so an unknown
                 // or malformed key is reported against the file that holds it.
-                let standalone: Config = global
-                    .clone()
-                    .try_into()
+                let standalone: Config = from_value(global.clone())
                     .with_context(|| format!("cannot parse {}", global_path.display()))?;
                 if !standalone.repos.is_empty() {
                     bail!(
@@ -425,9 +647,8 @@ impl Workspace {
         };
         sources.push(path.clone());
 
-        let config: Config = merged
-            .try_into()
-            .with_context(|| format!("cannot parse {}", path.display()))?;
+        let config: Config =
+            from_value(merged).with_context(|| format!("cannot parse {}", path.display()))?;
         config.validate(&path)?;
         Ok(Workspace {
             root: root.to_path_buf(),
@@ -460,8 +681,13 @@ impl Workspace {
         self.bare_dir().join(format!("{}.git", repo.name()))
     }
 
+    /// Directory the `local` integration takes its files from.
+    pub fn local_dir(&self) -> PathBuf {
+        resolve_dir(&self.root, &self.config.integrations.local.dir)
+    }
+
     pub fn state_path(&self) -> PathBuf {
-        self.root.join(STATE_DIR).join("state.toml")
+        self.root.join(STATE_DIR).join("state.yaml")
     }
 
     /// Whether each branch directory holds one subdirectory per repo.
@@ -509,7 +735,7 @@ impl Config {
         }
         if self.repo_layout == RepoLayout::Single && self.repos.len() > 1 {
             bail!(
-                "{}: repo_layout = \"single\" needs exactly one repo, found {}",
+                "{}: repo_layout: single needs exactly one repo, found {}",
                 path.display(),
                 self.repos.len()
             );
@@ -526,17 +752,68 @@ impl Config {
         if self.ui.picker_cmd.is_empty() {
             bail!("{}: ui.picker_cmd must not be empty", path.display());
         }
-        if self.zoxide.command.is_empty() {
-            bail!("{}: zoxide.command must not be empty", path.display());
+        if self.integrations.zoxide.command.is_empty() {
+            bail!(
+                "{}: integrations.zoxide.command must not be empty",
+                path.display()
+            );
+        }
+        let local = &self.integrations.local;
+        if local.dir.trim().is_empty() {
+            bail!(
+                "{}: integrations.local.dir must not be empty",
+                path.display()
+            );
+        }
+        for rule in &local.paths {
+            if let Err(e) = rule.regex() {
+                bail!(
+                    "{}: integrations.local.paths: invalid pattern {:?}: {e}",
+                    path.display(),
+                    rule.pattern
+                );
+            }
+        }
+        for (manager, settings) in self.integrations.package_managers() {
+            if settings.command.as_ref().is_some_and(Vec::is_empty) {
+                bail!(
+                    "{}: integrations.{}.command must not be empty",
+                    path.display(),
+                    manager.name()
+                );
+            }
         }
         Ok(())
     }
 }
 
-fn read_toml(path: &Path) -> Result<toml::Value> {
+/// Read a configuration file into an untyped document, so the global and the
+/// workspace file can be merged before either is given a shape.
+fn read_yaml(path: &Path) -> Result<Value> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
-    toml::from_str(&text).with_context(|| format!("cannot parse {}", path.display()))
+    parse_yaml(&text).with_context(|| format!("cannot parse {}", path.display()))
+}
+
+/// Parse a configuration document. A file holding nothing but comments is an
+/// empty mapping rather than YAML's null, which no struct would accept.
+fn parse_yaml(text: &str) -> Result<Value> {
+    let value: Value = serde_yaml_ng::from_str(text)?;
+    Ok(match value {
+        Value::Null => Value::Mapping(Mapping::new()),
+        other => other,
+    })
+}
+
+/// Give a parsed document the shape of a `Config`.
+fn from_value(value: Value) -> Result<Config> {
+    Ok(serde_yaml_ng::from_value(value)?)
+}
+
+/// Parse configuration text straight into a `Config` — what a single file,
+/// unlayered, amounts to.
+pub fn parse(text: &str) -> Result<Config> {
+    from_value(parse_yaml(text)?)
 }
 
 /// Path of the user's global configuration.
@@ -555,16 +832,16 @@ pub fn global_config_path() -> Option<PathBuf> {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
     };
-    Some(base.join("ws").join("config.toml"))
+    Some(base.join("ws").join("config.yaml"))
 }
 
 /// Lay `over` on top of `base`, one key at a time.
 ///
-/// Tables merge so that a workspace setting one key of `[mux]` keeps the rest
-/// of the global `[mux]`. Everything else, arrays included, is replaced.
-fn merge_into(base: toml::Value, over: toml::Value) -> toml::Value {
+/// Mappings merge so that a workspace setting one key of `mux:` keeps the rest
+/// of the global `mux:`. Everything else, sequences included, is replaced.
+fn merge_into(base: Value, over: Value) -> Value {
     match (base, over) {
-        (toml::Value::Table(mut base), toml::Value::Table(over)) => {
+        (Value::Mapping(mut base), Value::Mapping(over)) => {
             for (key, value) in over {
                 let merged = match base.remove(&key) {
                     Some(existing) => merge_into(existing, value),
@@ -572,7 +849,7 @@ fn merge_into(base: toml::Value, over: toml::Value) -> toml::Value {
                 };
                 base.insert(key, merged);
             }
-            toml::Value::Table(base)
+            Value::Mapping(base)
         }
         (_, over) => over,
     }
@@ -601,50 +878,56 @@ fn root_via_gitdir(start: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The `ws.toml` written by `ws init` — repositories and little else.
+/// Double-quote a value that came from outside, so a name or a URL holding a
+/// colon, a quote or a leading indicator cannot bend the document around it.
+fn quoted(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// The `ws.yaml` written by `ws init` — repositories and little else.
 ///
 /// Settings live in the global configuration; a workspace only writes down
 /// what is actually its own, and overrides the rest key by key when it has to.
 pub fn local_template(name: &str, repos: &[String]) -> String {
-    // Order matters: in TOML a bare key belongs to the table above it, so the
-    // single-key overrides have to be offered before the first [[repo]] and
-    // the table overrides after the last one.
     let mut out = format!(
-        "name = \"{name}\"\n\
+        "name: {}\n\
          \n\
          # Settings come from the global configuration, which `ws init --global`\n\
-         # writes with every key documented. Override single keys here, above\n\
-         # the repositories:\n\
-         # branch_dirs = \"nested\"\n\
-         # worktree_dir = \"~/trees/{name}\"\n\n"
+         # writes with every key documented. Override single keys or whole\n\
+         # sections here, in any order.\n\
+         # branch_dirs: nested\n\
+         # worktree_dir: {}\n\
+         # mux:\n\
+         #   root_window: ws\n\n",
+        quoted(name),
+        quoted(&format!("~/trees/{name}")),
     );
 
     if repos.is_empty() {
         out.push_str(
-            "# One [[repo]] block per repository.\n\
-             # [[repo]]\n\
-             # name = \"api\"\n\
-             # url = \"git@github.com:org/api.git\"\n\
-             # path = \"services/api\"   # where it sits inside a branch directory\n\
-             # setup = \"pnpm install\"  # runs once, in each new worktree\n\n",
+            "# One entry per repository under `repos`.\n\
+             # repos:\n\
+             #   - name: api\n\
+             #     url: \"git@github.com:org/api.git\"\n\
+             #     path: services/api    # where it sits inside a branch directory\n\
+             #     setup: cp .env.example .env   # once per new worktree, after the install\n\
+             #     # or a script; {root} {branch} {branch_dir} {worktree} {repo}\n\
+             #     # {env:NAME} {env:NAME:-default} — {{...}} escapes one\n\
+             #     # setup: |\n\
+             #     #   cp {root}/shared/.env .env\n\
+             #     #   make codegen\n",
         );
     } else {
+        out.push_str("repos:\n");
         for url in repos {
             out.push_str(&format!(
-                "[[repo]]\n\
-                 name = \"{}\"\n\
-                 url = \"{url}\"\n\
-                 # setup = \"pnpm install\"\n\n",
-                repo_name_from_url(url)
+                "  - name: {}\n    url: {}\n    # setup: cp .env.example .env\n",
+                quoted(&repo_name_from_url(url)),
+                quoted(url),
             ));
         }
     }
-
-    out.push_str(
-        "# Whole-section overrides belong below the repositories, for example:\n\
-         # [mux]\n\
-         # root_window = \"ws\"\n",
-    );
     out
 }
 
@@ -652,54 +935,112 @@ pub fn local_template(name: &str, repos: &[String]) -> String {
 /// purpose: serializing the struct would drop every comment.
 pub fn global_template() -> String {
     "# ws — global configuration, applied to every workspace.\n\
-     # A workspace's ws.toml lists the repositories and overrides any key here.\n\
+     # A workspace's ws.yaml lists the repositories and overrides any key here.\n\
      \n\
      # Branch checked out by `ws fetch`.\n\
-     default_branch = \"main\"\n\
+     default_branch: main\n\
      # What new branches fork from; omit to use each repo's own default branch.\n\
-     # base_branch = \"main\"\n\
+     # base_branch: main\n\
      \n\
-     # auto: one repo -> the branch directory is the worktree;\n\
-     #       several -> <branch>/<repo>/. Force with \"single\" or \"grouped\".\n\
-     repo_layout = \"auto\"\n\
+     # auto — one repo -> the branch directory is the worktree;\n\
+     #        several -> <branch>/<repo>/. Force with \"single\" or \"grouped\".\n\
+     repo_layout: auto\n\
      # flat: feature/x -> feature-x   |   nested: feature/x -> feature/x\n\
-     branch_dirs = \"flat\"\n\
-     # Both are resolved per workspace: relative to its ws.toml, or absolute\n\
+     branch_dirs: flat\n\
+     # Both are resolved per workspace: relative to its ws.yaml, or absolute\n\
      # with \"~\" expanded. An absolute worktree_dir here would put every\n\
      # workspace's branches in one directory, so set that one per workspace.\n\
-     bare_dir = \".bare\"\n\
-     worktree_dir = \".\"\n\
+     bare_dir: .bare\n\
+     worktree_dir: .\n\
      \n\
-     [mux]\n\
-     # auto | tmux | herdr | none\n\
-     backend = \"auto\"\n\
-     # placeholders: {workspace} {branch} {branch_raw}\n\
-     session = \"{workspace}/{branch}\"\n\
-     # shared window/pane for the branch directory; \"\" disables it\n\
-     root_window = \"ws\"\n\
-     # what to do with no multiplexer: print-path | nothing\n\
-     on_none = \"print-path\"\n\
+     mux:\n\
+     \x20 # auto | tmux | herdr | none\n\
+     \x20 backend: auto\n\
+     \x20 # placeholders: {workspace} {branch} {branch_raw}\n\
+     \x20 session: \"{workspace}/{branch}\"\n\
+     \x20 # shared window/pane for the branch directory; \"\" disables it\n\
+     \x20 root_window: ws\n\
+     \x20 # what to do with no multiplexer: print-path | nothing\n\
+     \x20 on_none: print-path\n\
+     \x20 tmux:\n\
+     \x20   layout: windows\n\
+     \x20   command: [tmux]\n\
+     \x20 herdr:\n\
+     \x20   # tabs: one tab per repository, plus one for the branch directory;\n\
+     \x20   # panes: all of them side by side in a single tab.\n\
+     \x20   layout: tabs\n\
+     \x20   # Where `panes` splits; ignored by `tabs`.\n\
+     \x20   split_direction: right\n\
+     \x20   command: [herdr]\n\
+     \x20   # command: [nix, run, \"nixpkgs#herdr\", --]\n\
      \n\
-     [mux.tmux]\n\
-     layout = \"windows\"\n\
-     command = [\"tmux\"]\n\
+     ui:\n\
+     \x20 # auto | popup | inline | none\n\
+     \x20 picker: auto\n\
+     \x20 picker_cmd: [fzf]\n\
+     \x20 popup: { width: \"80%\", height: \"60%\" }\n\
      \n\
-     [mux.herdr]\n\
-     split_direction = \"right\"\n\
-     command = [\"herdr\"]\n\
-     # command = [\"nix\", \"run\", \"nixpkgs#herdr\", \"--\"]\n\
-     \n\
-     [ui]\n\
-     # auto | popup | inline | none\n\
-     picker = \"auto\"\n\
-     picker_cmd = [\"fzf\"]\n\
-     popup = { width = \"80%\", height = \"60%\" }\n\
-     \n\
-     [zoxide]\n\
-     enabled = \"auto\"\n\
-     # worktrees | branch-dirs | both | none\n\
-     register = \"both\"\n\
-     command = [\"zoxide\"]\n"
+     # Every integration resolves \"auto\" against whether its program is on\n\
+     # PATH; `false` opts out and `true` insists on it.\n\
+     integrations:\n\
+     \x20 zoxide:\n\
+     \x20   enabled: auto\n\
+     \x20   # worktrees | branch-dirs | both | none\n\
+     \x20   register: both\n\
+     \x20   command: [zoxide]\n\
+     \x20 # Untracked files kept in `dir` (resolved like bare_dir) and placed\n\
+     \x20 # into every worktree on switch: everything in it for a single repo,\n\
+     \x20 # <dir>/<repo>/ for each repo of several. Each entry's relative path\n\
+     \x20 # is matched against the `paths` rules in order — the whole path, as\n\
+     \x20 # a regular expression — and the first match picks the mode:\n\
+     \x20 #   link     a symlink, shared by every worktree\n\
+     \x20 #   copy     an independent copy per worktree\n\
+     \x20 #   hardlink shared like link, but a real file\n\
+     \x20 # A path no rule matches is left out; a file the worktree already\n\
+     \x20 # has is never replaced. `auto` means \"when dir exists\".\n\
+     \x20 local:\n\
+     \x20   enabled: auto\n\
+     \x20   dir: local\n\
+     \x20   paths:\n\
+     \x20     # - { pattern: \"\\\\.env.*\", mode: copy }\n\
+     \x20     - { pattern: \".*\", mode: link }\n\
+     \x20 # The package managers pick themselves per repository, from the\n\
+     \x20 # packageManager field of its package.json or from its lockfile, and\n\
+     \x20 # install in every worktree they are created in. The install is held\n\
+     \x20 # to the lockfile, so it is the same every time:\n\
+     \x20 #   yarn install --immutable        (--frozen-lockfile on yarn 1.x)\n\
+     \x20 #   pnpm install --frozen-lockfile\n\
+     \x20 #   npm ci\n\
+     \x20 #   uv sync\n\
+     \x20 # Set `install` to replace those arguments entirely.\n\
+     \x20 #\n\
+     \x20 # `link` seeds a new worktree's node_modules by hard-linking the one\n\
+     \x20 # from the branch you switched from, or from the default branch,\n\
+     \x20 # before installing — an inode per file instead of a download.\n\
+     \x20 yarn:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [yarn]\n\
+     \x20   # install: [install, --immutable]\n\
+     \x20   link: true\n\
+     \x20 pnpm:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [pnpm]\n\
+     \x20   # install: [install, --frozen-lockfile]\n\
+     \x20   link: true\n\
+     \x20 npm:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [npm]\n\
+     \x20   # `npm ci` deletes node_modules before installing, which is what\n\
+     \x20   # makes it reproducible, so there is nothing to seed. For the\n\
+     \x20   # speed instead, set both of these.\n\
+     \x20   # install: [install]\n\
+     \x20   link: false\n\
+     \x20 # A virtualenv is not relocatable, so uv is never seeded — its own\n\
+     \x20 # global cache already hard-links the packages into place.\n\
+     \x20 uv:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [uv]\n\
+     \x20   # install: [sync]\n"
         .to_string()
 }
 
@@ -709,7 +1050,7 @@ mod tests {
 
     #[test]
     fn defaults_fill_in() {
-        let cfg: Config = toml::from_str("").unwrap();
+        let cfg = parse("").unwrap();
         assert_eq!(cfg.default_branch, "main");
         assert_eq!(cfg.bare_dir, ".bare");
         assert_eq!(cfg.branch_dirs, BranchDirs::Flat);
@@ -717,8 +1058,70 @@ mod tests {
         assert_eq!(cfg.mux.session, "{workspace}/{branch}");
         assert_eq!(cfg.mux.tmux.command, ["tmux"]);
         assert_eq!(cfg.ui.picker, PickerMode::Auto);
-        assert_eq!(cfg.zoxide.register, Register::Both);
-        assert_eq!(cfg.zoxide.enabled, Toggle::Named(NamedToggle::Auto));
+        assert_eq!(cfg.integrations.zoxide.register, Register::Both);
+        assert_eq!(
+            cfg.integrations.zoxide.enabled,
+            Toggle::Named(NamedToggle::Auto)
+        );
+        for (manager, settings) in cfg.integrations.package_managers() {
+            assert_eq!(settings.enabled, Toggle::Named(NamedToggle::Auto));
+            assert_eq!(settings.command(manager), [manager.name()]);
+        }
+    }
+
+    #[test]
+    fn package_manager_defaults_come_from_the_manager_not_the_file() {
+        // A workspace writes down only what it wants to differ, so a single
+        // key has to leave the rest of the manager's own defaults standing.
+        let cfg = parse("integrations:\n  pnpm:\n    enabled: false\n").unwrap();
+        let pnpm = &cfg.integrations.pnpm;
+        assert_eq!(pnpm.enabled, Toggle::Bool(false));
+        assert_eq!(pnpm.command(Manager::Pnpm), ["pnpm"]);
+        assert!(pnpm.install.is_none());
+        assert!(pnpm.link(Manager::Pnpm));
+
+        // `npm ci` throws a seeded node_modules away, so npm does not seed one
+        // unless it is asked to; a virtualenv cannot be seeded at all.
+        assert!(!cfg.integrations.npm.link(Manager::Npm));
+        let cfg = parse("integrations:\n  npm:\n    link: true\n  uv:\n    link: true\n").unwrap();
+        assert!(cfg.integrations.npm.link(Manager::Npm));
+        assert!(!cfg.integrations.uv.link(Manager::Uv));
+    }
+
+    #[test]
+    fn local_defaults_to_linking_everything_from_local() {
+        let cfg = parse("").unwrap();
+        let local = &cfg.integrations.local;
+        assert_eq!(local.enabled, Toggle::Named(NamedToggle::Auto));
+        assert_eq!(local.dir, "local");
+        assert_eq!(local.paths.len(), 1);
+        assert_eq!(local.paths[0].pattern, ".*");
+        assert_eq!(local.paths[0].mode, LocalMode::Link);
+
+        // A rule that names only its pattern links.
+        let cfg = parse("integrations:\n  local:\n    paths:\n      - pattern: x\n").unwrap();
+        assert_eq!(cfg.integrations.local.paths[0].mode, LocalMode::Link);
+    }
+
+    #[test]
+    fn an_invalid_local_pattern_is_rejected_at_load() {
+        let cfg = parse("integrations:\n  local:\n    paths:\n      - pattern: \"(\"\n").unwrap();
+        assert!(cfg.validate(Path::new(CONFIG_FILE)).is_err());
+    }
+
+    #[test]
+    fn an_empty_launcher_is_rejected() {
+        let cfg = parse("integrations:\n  yarn:\n    command: []\n").unwrap();
+        assert!(cfg.validate(Path::new(CONFIG_FILE)).is_err());
+    }
+
+    #[test]
+    fn a_file_of_nothing_but_comments_is_an_empty_config() {
+        // YAML reads a document without a node as null, which no struct would
+        // accept — a workspace file may well be all comments.
+        let cfg = parse("# nothing here yet\n").unwrap();
+        assert_eq!(cfg.default_branch, "main");
+        assert!(cfg.repos.is_empty());
     }
 
     #[test]
@@ -735,14 +1138,13 @@ mod tests {
 
     #[test]
     fn setup_accepts_string_or_list() {
-        let cfg: Config = toml::from_str(
+        let cfg = parse(
             r#"
-            [[repo]]
-            url = "x/a.git"
-            setup = "pnpm i"
-            [[repo]]
-            url = "x/b.git"
-            setup = ["pnpm i", "cp .env.example .env"]
+            repos:
+              - url: x/a.git
+                setup: pnpm i
+              - url: x/b.git
+                setup: [pnpm i, cp .env.example .env]
             "#,
         )
         .unwrap();
@@ -752,25 +1154,17 @@ mod tests {
 
     #[test]
     fn zoxide_enabled_accepts_bool_and_auto() {
-        let cfg: Config = toml::from_str("[zoxide]\nenabled = false\n").unwrap();
-        assert_eq!(cfg.zoxide.enabled, Toggle::Bool(false));
-        assert!(!cfg.zoxide.enabled.resolve(true));
+        let cfg = parse("integrations:\n  zoxide:\n    enabled: false\n").unwrap();
+        assert_eq!(cfg.integrations.zoxide.enabled, Toggle::Bool(false));
+        assert!(!cfg.integrations.zoxide.enabled.resolve(true));
         assert!(Toggle::default().resolve(true));
         assert!(!Toggle::default().resolve(false));
     }
 
     #[test]
     fn duplicate_repo_names_are_rejected() {
-        let cfg: Config = toml::from_str(
-            r#"
-            [[repo]]
-            url = "a/api.git"
-            [[repo]]
-            url = "b/api.git"
-            "#,
-        )
-        .unwrap();
-        assert!(cfg.validate(Path::new("ws.toml")).is_err());
+        let cfg = parse("repos:\n  - url: a/api.git\n  - url: b/api.git\n").unwrap();
+        assert!(cfg.validate(Path::new(CONFIG_FILE)).is_err());
     }
 
     #[test]
@@ -791,31 +1185,31 @@ mod tests {
 
     #[test]
     fn repo_dir_defaults_to_the_name_and_may_be_nested() {
-        let cfg: Config = toml::from_str(
+        let cfg = parse(
             r#"
-            [[repo]]
-            url = "x/api.git"
-            [[repo]]
-            name = "web"
-            url = "x/web.git"
-            path = "services/web"
+            repos:
+              - url: x/api.git
+              - name: web
+                url: x/web.git
+                path: services/web
             "#,
         )
         .unwrap();
         assert_eq!(cfg.repos[0].dir(), PathBuf::from("api"));
         assert_eq!(cfg.repos[1].dir(), PathBuf::from("services/web"));
-        cfg.validate(Path::new("ws.toml")).unwrap();
+        cfg.validate(Path::new(CONFIG_FILE)).unwrap();
     }
 
     #[test]
     fn a_repo_path_may_not_escape_the_branch_directory() {
         for bad in ["/abs", "../up", "a/../../b", ""] {
-            let cfg: Config = toml::from_str(&format!(
-                "[[repo]]\nname = \"api\"\nurl = \"x/api.git\"\npath = \"{bad}\"\n"
+            let cfg = parse(&format!(
+                "repos:\n  - name: api\n    url: x/api.git\n    path: {}\n",
+                quoted(bad)
             ))
             .unwrap();
             assert!(
-                cfg.validate(Path::new("ws.toml")).is_err(),
+                cfg.validate(Path::new(CONFIG_FILE)).is_err(),
                 "{bad:?} should be rejected"
             );
         }
@@ -823,90 +1217,174 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_rejected() {
-        assert!(toml::from_str::<Config>("nope = 1").is_err());
+        assert!(parse("nope: 1\n").is_err());
     }
 
     #[test]
     fn both_templates_parse_back() {
         let local = local_template("demo", &["git@github.com:org/api.git".into()]);
-        let cfg: Config = toml::from_str(&local).unwrap();
+        let cfg = parse(&local).unwrap();
         assert_eq!(cfg.name.as_deref(), Some("demo"));
         assert_eq!(cfg.repos.len(), 1);
         assert_eq!(cfg.repos[0].name(), "api");
-        cfg.validate(Path::new("ws.toml")).unwrap();
+        assert_eq!(cfg.repos[0].url, "git@github.com:org/api.git");
+        cfg.validate(Path::new(CONFIG_FILE)).unwrap();
 
-        let global: Config = toml::from_str(&global_template()).unwrap();
+        let global = parse(&global_template()).unwrap();
         assert!(global.repos.is_empty(), "the global template has no repos");
-        global.validate(Path::new("config.toml")).unwrap();
+        global.validate(Path::new("config.yaml")).unwrap();
+    }
+
+    #[test]
+    fn the_global_template_writes_down_the_defaults_it_documents() {
+        // The file claims to show every key with its default filled in; if a
+        // default moves, the template has to move with it.
+        let global = parse(&global_template()).unwrap();
+        let defaults = Config::default();
+        assert_eq!(global.default_branch, defaults.default_branch);
+        assert_eq!(global.repo_layout, defaults.repo_layout);
+        assert_eq!(global.branch_dirs, defaults.branch_dirs);
+        assert_eq!(global.bare_dir, defaults.bare_dir);
+        assert_eq!(global.worktree_dir, defaults.worktree_dir);
+        assert_eq!(global.mux.backend, defaults.mux.backend);
+        assert_eq!(global.mux.session, defaults.mux.session);
+        assert_eq!(global.mux.root_window, defaults.mux.root_window);
+        assert_eq!(global.mux.on_none, defaults.mux.on_none);
+        assert_eq!(global.mux.tmux.layout, defaults.mux.tmux.layout);
+        assert_eq!(global.mux.tmux.command, defaults.mux.tmux.command);
+        assert_eq!(global.mux.herdr.layout, defaults.mux.herdr.layout);
+        assert_eq!(
+            global.mux.herdr.split_direction,
+            defaults.mux.herdr.split_direction
+        );
+        assert_eq!(global.mux.herdr.command, defaults.mux.herdr.command);
+        assert_eq!(global.ui.picker, defaults.ui.picker);
+        assert_eq!(global.ui.picker_cmd, defaults.ui.picker_cmd);
+        assert_eq!(global.ui.popup.width, defaults.ui.popup.width);
+        assert_eq!(global.ui.popup.height, defaults.ui.popup.height);
+
+        let (written, fallback) = (&global.integrations, &defaults.integrations);
+        assert_eq!(written.zoxide.enabled, fallback.zoxide.enabled);
+        assert_eq!(written.zoxide.register, fallback.zoxide.register);
+        assert_eq!(written.zoxide.command, fallback.zoxide.command);
+        assert_eq!(written.local.enabled, fallback.local.enabled);
+        assert_eq!(written.local.dir, fallback.local.dir);
+        let rules = |l: &LocalConfig| -> Vec<(String, LocalMode)> {
+            l.paths
+                .iter()
+                .map(|p| (p.pattern.clone(), p.mode))
+                .collect()
+        };
+        assert_eq!(rules(&written.local), rules(&fallback.local));
+        for ((manager, written), (_, fallback)) in written
+            .package_managers()
+            .into_iter()
+            .zip(fallback.package_managers())
+        {
+            assert_eq!(written.enabled, fallback.enabled, "{}", manager.name());
+            assert_eq!(
+                written.command(manager),
+                fallback.command(manager),
+                "{}",
+                manager.name()
+            );
+            assert_eq!(written.install, fallback.install, "{}", manager.name());
+            assert_eq!(
+                written.link(manager),
+                fallback.link(manager),
+                "{}",
+                manager.name()
+            );
+        }
     }
 
     #[test]
     fn uncommenting_the_local_templates_hints_produces_valid_config() {
-        // A bare key after a [[repo]] header would land inside that repo, so
-        // the template has to offer its examples in workable positions.
-        let text = local_template("demo", &["git@github.com:org/api.git".into()]);
-        let uncommented: String = text
-            .lines()
-            .map(|line| match line.trim_start().strip_prefix("# ") {
-                // A commented example is a table header or a `key = value`;
-                // anything else in the template is prose and stays a comment.
-                Some(rest) if rest.starts_with('[') || rest.contains(" = ") => rest.to_string(),
-                _ => line.to_string(),
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let cfg: Config = toml::from_str(&uncommented)
-            .unwrap_or_else(|e| panic!("{e}\n--- in ---\n{uncommented}"));
-        assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
-        assert_eq!(cfg.mux.root_window, "ws");
-        assert_eq!(cfg.repos.len(), 1);
-        cfg.validate(Path::new("ws.toml")).unwrap();
+        // Every commented example is offered as something you can simply
+        // uncomment, so each one has to stand on its own — at the indentation
+        // the template put it at, which is what carries the nesting in YAML.
+        for repos in [vec![], vec!["git@github.com:org/api.git".to_string()]] {
+            let text = local_template("demo", &repos);
+            let uncommented: String = text
+                .lines()
+                .map(|line| {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    match line.trim_start().strip_prefix("# ") {
+                        // A commented example is a mapping key or a sequence
+                        // item; anything else is prose and stays a comment.
+                        Some(rest)
+                            if rest.contains(": ")
+                                || rest.ends_with(':')
+                                || rest.starts_with("- ") =>
+                        {
+                            format!("{indent}{rest}")
+                        }
+                        _ => line.to_string(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let cfg =
+                parse(&uncommented).unwrap_or_else(|e| panic!("{e}\n--- in ---\n{uncommented}"));
+            assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
+            assert_eq!(cfg.mux.root_window, "ws");
+            assert_eq!(cfg.repos.len(), 1);
+            assert_eq!(cfg.repos[0].setup_commands(), ["cp .env.example .env"]);
+            cfg.validate(Path::new(CONFIG_FILE)).unwrap();
+        }
     }
 
     #[test]
     fn the_local_template_carries_only_identity_and_repos() {
         let text = local_template("demo", &["git@github.com:org/api.git".into()]);
-        let value: toml::Value = toml::from_str(&text).unwrap();
+        let value = parse_yaml(&text).unwrap();
         let keys: Vec<&str> = value
-            .as_table()
+            .as_mapping()
             .unwrap()
             .keys()
-            .map(String::as_str)
+            .map(|k| k.as_str().unwrap())
             .collect();
-        assert_eq!(keys, ["name", "repo"]);
+        assert_eq!(keys, ["name", "repos"]);
+    }
+
+    #[test]
+    fn a_name_that_needs_quoting_survives_the_template() {
+        let text = local_template(r#"we: "ird""#, &[]);
+        let cfg = parse(&text).unwrap();
+        assert_eq!(cfg.name.as_deref(), Some(r#"we: "ird""#));
     }
 
     #[test]
     fn merging_replaces_keys_and_keeps_the_rest_of_a_table() {
-        let global: toml::Value = toml::from_str(
-            "branch_dirs = \"nested\"\n\
-             [mux]\nbackend = \"herdr\"\nroot_window = \"ws\"\n\
-             [ui]\npicker_cmd = [\"fzf\", \"--border\"]\n",
+        let global = parse_yaml(
+            "branch_dirs: nested\n\
+             mux:\n  backend: herdr\n  root_window: ws\n\
+             ui:\n  picker_cmd: [fzf, --border]\n",
         )
         .unwrap();
-        let local: toml::Value = toml::from_str(
-            "name = \"acme\"\n\
-             [mux]\nroot_window = \"acme\"\n\
-             [ui]\npicker_cmd = [\"sk\"]\n",
+        let local = parse_yaml(
+            "name: acme\n\
+             mux:\n  root_window: acme\n\
+             ui:\n  picker_cmd: [sk]\n",
         )
         .unwrap();
 
-        let cfg: Config = merge_into(global, local).try_into().unwrap();
+        let cfg = from_value(merge_into(global, local)).unwrap();
         assert_eq!(cfg.name.as_deref(), Some("acme"));
         // untouched by the workspace, so the global value survives
         assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
         assert_eq!(cfg.mux.backend, Backend::Herdr);
-        // overridden key by key, not table by table
+        // overridden key by key, not section by section
         assert_eq!(cfg.mux.root_window, "acme");
-        // arrays are replaced whole, never appended to
+        // sequences are replaced whole, never appended to
         assert_eq!(cfg.ui.picker_cmd, ["sk"]);
     }
 
     #[test]
     fn merging_an_empty_workspace_file_changes_nothing() {
-        let global: toml::Value = toml::from_str("branch_dirs = \"nested\"\n").unwrap();
-        let local: toml::Value = toml::from_str("").unwrap();
-        let cfg: Config = merge_into(global, local).try_into().unwrap();
+        let global = parse_yaml("branch_dirs: nested\n").unwrap();
+        let local = parse_yaml("").unwrap();
+        let cfg = from_value(merge_into(global, local)).unwrap();
         assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
     }
 }

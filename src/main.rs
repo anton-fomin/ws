@@ -4,13 +4,14 @@ mod cli;
 mod config;
 mod exec;
 mod git;
+mod integration;
+mod marker;
 mod mux;
 mod paths;
 mod pick;
 mod setup;
 mod state;
 mod workspace;
-mod zoxide;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -19,9 +20,9 @@ use std::path::Path;
 use cli::{Cli, Command};
 use config::{Backend, Config, PickerMode, Workspace, CONFIG_FILE};
 use exec::{Cmd, Runner};
+use integration::{Local, PackageManagers, Zoxide};
 use pick::{Candidate, Picker};
 use workspace::SwitchOptions;
-use zoxide::Zoxide;
 
 fn main() {
     if let Err(e) = run() {
@@ -62,11 +63,15 @@ fn run() -> Result<()> {
             rerun_setup,
             no_setup,
             cd,
+            from,
         } => {
             let ws = Workspace::discover(&cwd)?;
+            let here = workspace::current_branch_name(&ws, &runner, &cwd);
             let options = SwitchOptions {
                 rerun_setup,
                 skip_setup: no_setup,
+                from: start_from(here.clone(), from),
+                seed_from: here,
             };
             switch_and_open(&ws, &runner, &branch, &options, force, cd)
         }
@@ -84,10 +89,69 @@ fn run() -> Result<()> {
             print!("{}", cli::shell_init(shell));
             Ok(())
         }
+        Command::Completions { shell } => {
+            cli::completions(shell, &mut std::io::stdout());
+            Ok(())
+        }
+        Command::Complete { what, word } => {
+            cmd_complete(&runner, &cwd, what, word.as_deref().unwrap_or_default())
+        }
         Command::Preview { payload } => {
             let ws = Workspace::discover(&cwd).ok();
             print!("{}", pick::preview(ws.as_ref(), &runner, &payload));
             Ok(())
+        }
+    }
+}
+
+/// Candidates for the shell completions. A shell asks this on every <Tab>, in
+/// whatever directory the prompt happens to sit in, so anything that is not a
+/// workspace — or a workspace git cannot read right now — is an empty list
+/// rather than an error.
+fn cmd_complete(runner: &Runner, cwd: &Path, what: cli::CompleteArg, word: &str) -> Result<()> {
+    let Ok(ws) = Workspace::discover(cwd) else {
+        return Ok(());
+    };
+    match what {
+        cli::CompleteArg::Worktrees => {
+            let base = ws.worktree_root();
+            for entry in workspace::list(&ws, runner, false).unwrap_or_default() {
+                let dir = entry.dir_name(&base);
+                let Some(branch) = entry.branch else {
+                    continue;
+                };
+                let repos: Vec<&str> = entry.repos.iter().map(|r| r.name.as_str()).collect();
+                let repos = repos.join(", ");
+                // The directory is what `ws rm` deletes, and naming it also
+                // keeps the descriptions distinct, which is what stops zsh
+                // from folding the branches into one line.
+                if dir == branch {
+                    println!("{branch}\t{repos}");
+                } else {
+                    println!("{branch}\t{dir} — {repos}");
+                }
+            }
+        }
+        cli::CompleteArg::Branches => {
+            describe(workspace::branch_choices(&ws, runner).unwrap_or_default())
+        }
+        cli::CompleteArg::Refs => {
+            describe(workspace::ref_choices(&ws, runner, word).unwrap_or_default())
+        }
+    }
+    Ok(())
+}
+
+/// `value<tab>description`, the line both the shells and `ws` agree on.
+fn describe(choices: Vec<workspace::BranchChoice>) {
+    for choice in choices {
+        let repos = choice.repos.join(", ");
+        match choice.kind {
+            workspace::ChoiceKind::CheckedOut => {
+                println!("{}\tchecked out — {repos}", choice.branch)
+            }
+            workspace::ChoiceKind::Branch => println!("{}\t{repos}", choice.branch),
+            workspace::ChoiceKind::Tag => println!("{}\ttag — {repos}", choice.branch),
         }
     }
 }
@@ -120,7 +184,7 @@ fn cmd_init(
     std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     eprintln!("wrote {}", path.display());
     if repos.is_empty() {
-        eprintln!("add one [[repo]] block per repository, then run `ws fetch`");
+        eprintln!("add one entry under `repos` per repository, then run `ws fetch`");
     } else {
         eprintln!("run `ws fetch` to clone them");
     }
@@ -163,6 +227,22 @@ fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
 }
 
 /// Shared by `ws switch` and a branch chosen in the picker.
+/// Where a new branch starts: `--from` when it was given, otherwise the
+/// branch of the directory the command ran in — forking from what you are
+/// looking at rather than from the base branch.
+fn start_from(here: Option<String>, flag: Option<String>) -> Option<workspace::Start> {
+    if let Some(reference) = flag {
+        return Some(workspace::Start {
+            reference,
+            source: workspace::StartSource::Flag,
+        });
+    }
+    here.map(|reference| workspace::Start {
+        reference,
+        source: workspace::StartSource::CurrentBranch,
+    })
+}
+
 fn switch_and_open(
     ws: &Workspace,
     runner: &Runner,
@@ -177,7 +257,7 @@ fn switch_and_open(
         eprintln!("created worktrees: {}", switched.created.join(", "));
     }
 
-    let zox = Zoxide::new(&ws.config.zoxide);
+    let zox = Zoxide::new(&ws.config.integrations.zoxide);
     let worktrees = switched.paths();
     let register = zox.paths_to_register(&switched.branch_dir, &worktrees);
     zox.add(runner, &register);
@@ -261,7 +341,7 @@ fn cmd_rm(
     let ws = Workspace::discover(cwd)?;
     let removed = workspace::remove(&ws, runner, branch, force)?;
 
-    let zox = Zoxide::new(&ws.config.zoxide);
+    let zox = Zoxide::new(&ws.config.integrations.zoxide);
     let worktrees = removed.paths();
     let register = zox.paths_to_register(&removed.branch_dir, &worktrees);
     zox.remove(runner, &register);
@@ -295,13 +375,32 @@ fn cmd_status(runner: &Runner, cwd: &Path) -> Result<()> {
         }
     );
 
-    let current = workspace::list(&ws, runner, false)?
-        .into_iter()
-        .find(|entry| cwd.starts_with(&entry.dir));
-    match current {
+    // What `auto` resolved to on this machine, which is otherwise only
+    // visible from what a switch does.
+    let mut active: Vec<&str> = Vec::new();
+    if Zoxide::new(&ws.config.integrations.zoxide).is_enabled() {
+        active.push("zoxide");
+    }
+    if Local::new(&ws).is_enabled() {
+        active.push("local");
+    }
+    active.extend(PackageManagers::new(&ws.config.integrations).names());
+    println!(
+        "tools      {}",
+        if active.is_empty() {
+            "(none)".to_string()
+        } else {
+            active.join(", ")
+        }
+    );
+
+    match workspace::current_branch(&ws, runner, cwd) {
         Some(entry) => {
             let branch = entry.branch.clone().unwrap_or_else(|| "(detached)".into());
             println!("branch     {branch}");
+            if let Some(from) = marker::Marker::load(&entry.dir).and_then(|m| m.from) {
+                println!("started    {from}");
+            }
             println!("session    {}", workspace::session_name_for(&ws, &branch));
             for repo in entry.repos {
                 println!(
@@ -340,7 +439,7 @@ fn cmd_pick(
             config.ui.picker,
             config.ui.popup.clone(),
         );
-        let zox = Zoxide::new(&config.zoxide);
+        let zox = Zoxide::new(&config.integrations.zoxide);
         let root = current
             .as_ref()
             .map(|w| w.root.clone())
@@ -394,14 +493,13 @@ fn cmd_pick(
                 let ws = current
                     .as_ref()
                     .context("a branch was chosen outside a workspace")?;
-                return switch_and_open(
-                    ws,
-                    runner,
-                    &branch,
-                    &SwitchOptions::default(),
-                    force,
-                    false,
-                );
+                let here = workspace::current_branch_name(ws, runner, cwd);
+                let options = SwitchOptions {
+                    from: start_from(here.clone(), None),
+                    seed_from: here,
+                    ..SwitchOptions::default()
+                };
+                return switch_and_open(ws, runner, &branch, &options, force, false);
             }
             Some(Candidate::Workspace { root }) => {
                 current = Some(Workspace::load(&root)?);
@@ -422,6 +520,6 @@ fn missing_candidates_hint(in_workspace: bool, zoxide_enabled: bool) -> String {
 
 impl Default for Config {
     fn default() -> Config {
-        toml::from_str("").expect("the empty config is valid")
+        config::parse("").expect("the empty config is valid")
     }
 }
