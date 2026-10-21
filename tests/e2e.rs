@@ -685,6 +685,23 @@ fn completion_scripts_are_emitted_for_every_supported_shell() {
     assert_eq!(zsh.matches(":_ws_branches'").count(), 1, "zsh: {zsh}");
     assert_eq!(zsh.matches(":REF:_ws_refs'").count(), 1, "zsh: {zsh}");
     assert_eq!(zsh.matches(":_ws_tasks'").count(), 1, "zsh: {zsh}");
+    // Autoloaded from fpath, the script calls `_ws` at its dispatch, so every
+    // helper has to be defined above it — an `eval` of it would not notice.
+    let dispatch = zsh
+        .find(r#"if [ "$funcstack[1]" = "_ws" ]; then"#)
+        .expect("clap's zsh script dispatches at its end");
+    for helper in [
+        "_ws_worktrees() {",
+        "_ws_branches() {",
+        "_ws_refs() {",
+        "_ws_tasks() {",
+        "_ws_candidates() {",
+    ] {
+        let at = zsh
+            .find(helper)
+            .unwrap_or_else(|| panic!("zsh: {helper} missing"));
+        assert!(at < dispatch, "zsh: {helper} comes after the dispatch");
+    }
     assert!(bash.contains("_ws_candidates tasks "));
 
     let fish = ws(&root).args(["completions", "fish"]).assert().success();

@@ -366,7 +366,21 @@ environment — **replaces** `fpath` with that one directory instead of adding t
 it, so every standard completion function disappears at once. Unsetting it on
 the way out empties `fpath` altogether.
 
-What works is a completion that loads itself the first time you ask for one:
+What a dev shell *can* do is say where its completions are: `mkShell` puts
+every package's `share` directory on `XDG_DATA_DIRS`, the `ws` package's
+`share/zsh/site-functions/_ws` included, and direnv exports that like any other
+variable. [zsh-completion-sync](https://github.com/BronzeDeer/zsh-completion-sync)
+watches it before every prompt, adds the new `site-functions` directories to
+`fpath` and registers what they hold — so the completion of every package in
+the shell appears on entering it and goes again on leaving. One line in
+`~/.zshrc`, after `compinit` and the direnv hook, and nothing per project:
+
+```zsh
+znap source BronzeDeer/zsh-completion-sync     # or source its .plugin.zsh
+```
+
+Without a plugin, a completion that loads itself the first time you ask for
+one does the same for `ws` alone:
 
 ```zsh
 # ~/.zshrc, after compinit
@@ -380,10 +394,13 @@ _ws() {
 compdef _ws ws
 ```
 
-`ws` then has to exist only at the moment you press <kbd>Tab</kbd>, which is
-what makes this work for a `ws` that lives in a dev shell — and outside one the
-stub simply yields no matches. It costs one `ws completions zsh` per shell and
-covers `nix develop`, `nix develop -c zsh` and direnv alike.
+`ws` then has to exist only at the moment you press <kbd>Tab</kbd> — outside
+a dev shell the stub simply yields no matches. It costs one
+`ws completions zsh` per shell and covers `nix develop`, `nix develop -c zsh`
+and direnv alike.
+
+And for the shell you are in, by hand: `eval "$(ws completions zsh)"`, once
+`compinit` has run.
 
 ## Multiplexers
 

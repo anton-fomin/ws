@@ -269,8 +269,17 @@ fn zsh_addendum(script: String) -> String {
         })
         .collect();
     let hooked = hooked.join("\n");
+    // The helpers go in before the generated script's last lines, which call
+    // `_ws` straight away when the file is autoloaded from `fpath` — the first
+    // <Tab> would otherwise ask for helpers that are not defined yet. Only an
+    // `eval` of the script, which reaches `compdef` instead, got away with
+    // them at the end.
+    let (head, tail) = match hooked.find(ZSH_DISPATCH) {
+        Some(at) => hooked.split_at(at),
+        None => (hooked.as_str(), ""),
+    };
     format!(
-        r#"{hooked}
+        r#"{head}
 _ws_worktrees() {{
     _ws_candidates worktrees worktree
 }}
@@ -308,9 +317,15 @@ _ws_candidates() {{
     (( ${{#candidates}} )) || return 1
     _describe -t "$2s" "$2" candidates
 }}
-"#
+
+{tail}"#
     )
 }
+
+/// Where clap's zsh script starts dispatching: to `_ws` itself when the file
+/// was autoloaded as the completion function, to `compdef` when it was
+/// sourced or `eval`ed.
+const ZSH_DISPATCH: &str = "if [ \"$funcstack[1]\" = \"_ws\" ]; then";
 
 /// fish reads `value<tab>description` straight out of a command.
 const FISH_BRANCHES: &str = r#"
