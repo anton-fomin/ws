@@ -1747,3 +1747,37 @@ fn run_logs_can_be_kept_in_the_workspace_root_instead() {
     assert!(root.join("logs/main/web.dev.log").is_file());
     assert!(!root.join("main/logs").exists());
 }
+
+#[test]
+fn run_names_a_worktree_git_has_lost_track_of() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(tmp.path(), "");
+    // What moving the workspace does to a worktree: its `.git` file points
+    // at an administrative directory that is no longer there.
+    // Both sides still name each other by their old absolute paths.
+    let web = root.join("main/web");
+    fs::write(
+        web.join(".git"),
+        "gitdir: /old/.bare/web.git/worktrees/web\n",
+    )
+    .unwrap();
+    for admin in fs::read_dir(root.join(".bare/web.git/worktrees")).unwrap() {
+        fs::write(admin.unwrap().path().join("gitdir"), "/old/main/web/.git\n").unwrap();
+    }
+
+    // From the branch directory, and from the root, where the record of the
+    // old path must not pass for the default branch's directory.
+    for dir in [root.join("main"), root.clone()] {
+        let out = ws_tasks(&dir, &bin)
+            .args(["run", "@web:dev"])
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr.contains("git does not list it as a worktree of web"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("worktree repair"), "{stderr}");
+    }
+}

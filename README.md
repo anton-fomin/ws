@@ -743,7 +743,7 @@ override those at runtime.
 
 ```
 nix develop              # rustc, cargo, clippy, rustfmt, git, tmux, fzf, zoxide
-cargo test               # 108 unit + 41 end-to-end tests, no network
+cargo test               # 108 unit + 42 end-to-end tests, no network
 cargo clippy --all-targets -- -D warnings
 ```
 

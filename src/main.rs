@@ -216,6 +216,12 @@ fn cmd_run(
         bail!("`@repo` lists a repository's tasks — name a task as `@repo:task` to run it");
     }
 
+    for target in &targets {
+        if let run::Target::Repo { repo, .. } = target {
+            unlinked_worktree(&ws, &entry, repo)?;
+        }
+    }
+
     let base = ws.worktree_root();
     let branch_name = entry
         .branch
@@ -266,6 +272,34 @@ fn cmd_run(
     run::run(runner, &jobs, run::Options { color, sinks })
 }
 
+/// A repository of the workspace whose checkout is in the branch directory
+/// but that git does not list as a worktree — what moving or renaming the
+/// workspace leaves behind, since a worktree and its bare repository point at
+/// each other by absolute path.
+fn unlinked_worktree(ws: &Workspace, entry: &workspace::BranchStatus, repo: &str) -> Result<()> {
+    if entry.repos.iter().any(|r| r.name == repo) {
+        return Ok(());
+    }
+    let Some(config) = ws.config.repos.iter().find(|r| r.name() == repo) else {
+        return Ok(());
+    };
+    let path = if ws.is_grouped() {
+        entry.dir.join(config.dir())
+    } else {
+        entry.dir.clone()
+    };
+    if !path.join(".git").exists() {
+        return Ok(());
+    }
+    bail!(
+        "{} is there, but git does not list it as a worktree of {repo} — the \
+         workspace was probably moved; relink it with\n  git --git-dir={} worktree repair {}",
+        path.display(),
+        ws.bare_path(config).display(),
+        path.display()
+    )
+}
+
 /// The branch directory `ws run` works in: the one named, the one the
 /// command was run from, or the default branch's.
 fn run_branch(
@@ -274,7 +308,12 @@ fn run_branch(
     cwd: &Path,
     branch: Option<&str>,
 ) -> Result<workspace::BranchStatus> {
-    let entries = workspace::list(ws, runner, false)?;
+    // A worktree git still records at a path that is gone — a moved
+    // workspace, a deleted directory — has nothing to run in.
+    let entries: Vec<_> = workspace::list(ws, runner, false)?
+        .into_iter()
+        .filter(|e| e.dir.is_dir())
+        .collect();
     let base = ws.worktree_root();
     if let Some(branch) = branch {
         return entries
