@@ -1645,11 +1645,18 @@ fn run_logs_every_task_to_its_own_rotated_file() {
         .success();
     let log = root.join("main/logs/web.dev.log");
     let text = fs::read_to_string(&log).unwrap();
-    assert!(text.starts_with("--- "), "{text}");
+    // stdout and stderr are separate pipes, so the order between their lines
+    // is the order they were read in — not something to assert on.
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 4, "{text}");
     assert!(
-        text.ends_with("npm run dev ---\nnpm run dev\ncareful\n--- exited with code 0 ---\n"),
+        lines[0].starts_with("--- ") && lines[0].ends_with("npm run dev ---"),
         "{text}"
     );
+    let mut middle = lines[1..3].to_vec();
+    middle.sort();
+    assert_eq!(middle, ["careful", "npm run dev"], "{text}");
+    assert_eq!(lines[3], "--- exited with code 0 ---", "{text}");
     assert!(root.join("main/logs/api.dev.log").is_file());
 
     // The second run pushes the file past 100 bytes: what it had moves to
