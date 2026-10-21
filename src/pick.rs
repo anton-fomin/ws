@@ -237,7 +237,7 @@ fn preview_branch(ws: &Workspace, runner: &Runner, branch: &str) -> String {
             continue;
         }
         let head = crate::git::current_branch(runner, &path).unwrap_or_else(|| "?".into());
-        let dirty = if crate::git::is_dirty(runner, &path) {
+        let dirty = if crate::git::is_dirty(runner, &path, ws.logs_in_worktree().as_deref()) {
             " dirty"
         } else {
             ""

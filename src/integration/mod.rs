@@ -13,8 +13,10 @@
 pub mod link;
 pub mod local;
 pub mod pm;
+pub mod tasks;
 pub mod zoxide;
 
 pub use local::Local;
 pub use pm::PackageManagers;
+pub use tasks::Tasks;
 pub use zoxide::Zoxide;

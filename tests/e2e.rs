@@ -678,15 +678,19 @@ fn completion_scripts_are_emitted_for_every_supported_shell() {
             "zsh: {kind}"
         );
     }
-    // Two rewritten actions for the worktrees, one each for the branches of
-    // `switch` and the refs of `--from`.
-    assert_eq!(zsh.matches(":_ws_worktrees'").count(), 2, "zsh: {zsh}");
+    // Four rewritten actions for the worktrees — `rm`, `path` and the two
+    // spellings of `run --branch` — one each for the branches of `switch`,
+    // the refs of `--from` and the tasks of `run`.
+    assert_eq!(zsh.matches(":_ws_worktrees'").count(), 4, "zsh: {zsh}");
     assert_eq!(zsh.matches(":_ws_branches'").count(), 1, "zsh: {zsh}");
     assert_eq!(zsh.matches(":REF:_ws_refs'").count(), 1, "zsh: {zsh}");
+    assert_eq!(zsh.matches(":_ws_tasks'").count(), 1, "zsh: {zsh}");
+    assert!(bash.contains("_ws_candidates tasks "));
 
     let fish = ws(&root).args(["completions", "fish"]).assert().success();
     let fish = String::from_utf8(fish.get_output().stdout.clone()).unwrap();
-    assert_eq!(fish.matches("ws __complete worktrees").count(), 2);
+    assert_eq!(fish.matches("ws __complete worktrees").count(), 3);
+    assert_eq!(fish.matches("ws __complete tasks").count(), 1);
     assert_eq!(fish.matches("ws __complete branches").count(), 1);
     assert_eq!(fish.matches("ws __complete refs").count(), 1);
     ws(&root)
@@ -1418,4 +1422,321 @@ fn an_unset_variable_without_a_default_names_the_way_out() {
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).into_owned();
     assert!(stderr.contains("WS_E2E_UNSET is not set"), "{stderr}");
     assert!(stderr.contains("{env:WS_E2E_UNSET:-"), "{stderr}");
+}
+
+/// A repository whose `main` carries the given files.
+fn origin_repo_with(parent: &Path, name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let path = origin_repo(parent, name);
+    for (file, body) in files {
+        fs::write(path.join(file), body).unwrap();
+    }
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "-m", "tasks"]);
+    path
+}
+
+/// Three repositories — a justfile, a package.json, and neither — checked
+/// out on `main`, with `just` and `npm` stubbed out.
+fn task_workspace(tmp: &Path, extra: &str) -> (PathBuf, PathBuf) {
+    let origins = tmp.join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo_with(&origins, "api", &[("justfile", "dev:\n  true\n")]);
+    let web = origin_repo_with(
+        &origins,
+        "web",
+        &[(
+            "package.json",
+            r#"{"scripts": {"dev": "vite", "build": "vite build", "fail": "exit 2"}}"#,
+        )],
+    );
+    let docs = origin_repo(&origins, "docs");
+
+    let bin = tmp.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    stub(
+        &bin,
+        "just",
+        r#"if [ "$1" = --dump ]; then
+  echo '{"recipes": {"dev": {"doc": "serve the api", "private": false},
+                     "_hidden": {"doc": null, "private": true}}, "modules": {}}'
+  exit 0
+fi
+echo "just $* in $WS_REPO on $WS_BRANCH""#,
+    );
+    stub(
+        &bin,
+        "npm",
+        r#"echo "npm $*"
+echo "careful" >&2
+[ "$2" = fail ] && exit 2
+exit 0"#,
+    );
+
+    let root = tmp.join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!(
+            "repos:\n  - url: \"{}\"\n  - url: \"{}\"\n  - url: \"{}\"\n\
+             tasks:\n  task: {{ enabled: false }}\n{extra}",
+            api.display(),
+            web.display(),
+            docs.display()
+        ),
+    );
+    ws(&root).arg("fetch").assert().success();
+    ws(&root)
+        .args(["switch", "main", "--no-setup"])
+        .assert()
+        .success();
+    (root, bin)
+}
+
+fn fails_with(cmd: &mut Command, message: &str) {
+    let out = cmd.output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains(message), "{stderr}");
+}
+
+fn ws_tasks(root: &Path, bin: &Path) -> Command {
+    let mut cmd = ws(root);
+    cmd.env("WS_JUST_CMD", bin.join("just"))
+        .env("WS_NPM_CMD", bin.join("npm"));
+    cmd
+}
+
+#[test]
+fn run_lists_the_tasks_of_every_repository() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(tmp.path(), "");
+
+    let out = ws_tasks(&root, &bin).arg("run").output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("api\n  dev    just     serve the api"),
+        "{text}"
+    );
+    assert!(
+        text.contains("web\n  build  package  vite build\n  dev    package  vite\n"),
+        "{text}"
+    );
+    assert!(text.contains("docs\n  (no tasks)"), "{text}");
+    assert!(!text.contains("_hidden"), "{text}");
+
+    let out = ws_tasks(&root, &bin)
+        .args(["run", "@web"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.starts_with("web\n"), "{text}");
+    assert!(!text.contains("api"), "{text}");
+
+    let out = ws_tasks(&root, &bin)
+        .args(["__complete", "tasks", "@w"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("@web:build\tpackage vite build\n"), "{text}");
+}
+
+#[test]
+fn run_runs_a_task_everywhere_it_exists_with_a_prefix_per_repository() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(tmp.path(), "");
+
+    let out = ws_tasks(&root, &bin).args(["run", "dev"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    // Padded to the longest label; no colour without a terminal.
+    assert!(
+        stdout.contains("api | just dev in api on main\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("web | npm run dev\n"), "{stdout}");
+    assert!(stderr.contains("web | careful\n"), "{stderr}");
+    assert!(!stdout.contains("docs"), "{stdout}");
+    assert!(!stdout.contains('\x1b'), "{stdout}");
+
+    // One repository, the arguments after `--` passed on; npm wants its own `--`.
+    let out = ws_tasks(&root, &bin)
+        .args(["run", "@web:build", "--", "--watch"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        stdout.lines().next(),
+        Some("web | npm run build -- --watch"),
+        "{stdout}"
+    );
+
+    // Different tasks are told apart by both names.
+    let out = ws_tasks(&root, &bin)
+        .args(["run", "@api:dev", "@web:build"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("api:dev   | just dev"), "{stdout}");
+    assert!(stdout.contains("web:build | npm run build"), "{stdout}");
+
+    // From inside a repository the branch is the one you stand in.
+    ws_tasks(&root.join("main/web"), &bin)
+        .args(["run", "@api:dev"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn run_fails_when_a_task_fails_or_does_not_exist() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(tmp.path(), "");
+
+    let out = ws_tasks(&root, &bin)
+        .args(["run", "fail", "@api:dev"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    // The other task still ran to the end.
+    assert!(stdout.contains("api:dev  | just dev"), "{stdout}");
+    assert!(stderr.contains("web:fail | exited with code 2"), "{stderr}");
+    assert!(stderr.contains("1 of 2 failed: web:fail"), "{stderr}");
+
+    fails_with(
+        ws_tasks(&root, &bin).args(["run", "nope"]),
+        "has a task named nope",
+    );
+    fails_with(
+        ws_tasks(&root, &bin).args(["run", "@docs:dev"]),
+        "docs has no task named dev",
+    );
+    fails_with(
+        ws_tasks(&root, &bin).args(["run", "@nope:dev"]),
+        "no repository named nope",
+    );
+    fails_with(
+        ws_tasks(&root, &bin).args(["run", "dev", "--branch", "feature/JIRA-123"]),
+        "has no worktrees",
+    );
+}
+
+#[test]
+fn run_logs_every_task_to_its_own_rotated_file() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(
+        tmp.path(),
+        "logs:\n  enabled: true\n  max_size: 100\n  keep: 1\n  timestamps: false\n",
+    );
+
+    ws_tasks(&root, &bin)
+        .args(["run", "dev"])
+        .assert()
+        .success();
+    let log = root.join("main/logs/web.dev.log");
+    let text = fs::read_to_string(&log).unwrap();
+    assert!(text.starts_with("--- "), "{text}");
+    assert!(
+        text.ends_with("npm run dev ---\nnpm run dev\ncareful\n--- exited with code 0 ---\n"),
+        "{text}"
+    );
+    assert!(root.join("main/logs/api.dev.log").is_file());
+
+    // The second run pushes the file past 100 bytes: what it had moves to
+    // `.1`, and with `keep: 1` nothing older survives.
+    ws_tasks(&root, &bin)
+        .args(["run", "@web:dev"])
+        .assert()
+        .success();
+    ws_tasks(&root, &bin)
+        .args(["run", "@web:dev"])
+        .assert()
+        .success();
+    assert!(root.join("main/logs/web.dev.log.1").is_file());
+    assert!(!root.join("main/logs/web.dev.log.2").exists());
+    let current = fs::read_to_string(&log).unwrap();
+    assert!(current.len() <= 100, "{current}");
+
+    // --no-logs keeps a run out of them.
+    fs::remove_dir_all(root.join("main/logs")).unwrap();
+    ws_tasks(&root, &bin)
+        .args(["run", "dev", "--no-logs"])
+        .assert()
+        .success();
+    assert!(!root.join("main/logs").exists());
+
+    // The logs belong to the branch directory, and go with it.
+    ws_tasks(&root, &bin)
+        .args(["run", "dev", "--logs"])
+        .assert()
+        .success();
+    ws(&root).args(["rm", "main"]).assert().success();
+    assert!(!root.join("main").exists());
+}
+
+#[test]
+fn run_logs_in_a_single_repository_do_not_dirty_its_worktree() {
+    let tmp = TempDir::new().unwrap();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let web = origin_repo_with(
+        &origins,
+        "web",
+        &[("package.json", r#"{"scripts": {"dev": "vite"}}"#)],
+    );
+    let bin = tmp.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    stub(&bin, "npm", "echo \"npm $*\"");
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!(
+            "repos:\n  - url: \"{}\"\nlogs:\n  enabled: true\n",
+            web.display()
+        ),
+    );
+    ws(&root).arg("fetch").assert().success();
+    ws(&root)
+        .args(["switch", "main", "--no-setup"])
+        .assert()
+        .success();
+
+    ws_tasks(&root, &bin)
+        .args(["run", "dev"])
+        .assert()
+        .success();
+    assert!(root.join("main/logs/web.dev.log").is_file());
+    let out = ws(&root).arg("list").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains("web*"), "{text}");
+
+    // Not dirty, so no --force; and the worktree comes out whole.
+    ws(&root).args(["rm", "main"]).assert().success();
+    assert!(!root.join("main").exists());
+}
+
+#[test]
+fn run_logs_can_be_kept_in_the_workspace_root_instead() {
+    let tmp = TempDir::new().unwrap();
+    let (root, bin) = task_workspace(
+        tmp.path(),
+        "logs:\n  enabled: true\n  dir: logs\n  file: \"{branch}/{repo}.{task}.log\"\n",
+    );
+    ws_tasks(&root, &bin)
+        .args(["run", "dev"])
+        .assert()
+        .success();
+    assert!(root.join("logs/main/web.dev.log").is_file());
+    assert!(!root.join("main/logs").exists());
 }

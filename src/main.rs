@@ -5,10 +5,12 @@ mod config;
 mod exec;
 mod git;
 mod integration;
+mod logs;
 mod marker;
 mod mux;
 mod paths;
 mod pick;
+mod run;
 mod setup;
 mod state;
 mod workspace;
@@ -20,7 +22,7 @@ use std::path::Path;
 use cli::{Cli, Command};
 use config::{Backend, Config, PickerMode, Workspace, CONFIG_FILE};
 use exec::{Cmd, Runner};
-use integration::{Local, PackageManagers, Zoxide};
+use integration::{Local, PackageManagers, Tasks, Zoxide};
 use pick::{Candidate, Picker};
 use workspace::SwitchOptions;
 
@@ -84,6 +86,20 @@ fn run() -> Result<()> {
         Command::List => cmd_list(&runner, &cwd),
         Command::Path { branch, repo } => cmd_path(&cwd, &branch, repo.as_deref()),
         Command::Rm { branch, force: f } => cmd_rm(&runner, force, &cwd, &branch, f),
+        Command::Run {
+            targets,
+            branch,
+            logs,
+            no_logs,
+            args,
+        } => {
+            let logs = match (logs, no_logs) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            };
+            cmd_run(&runner, &cwd, &targets, branch.as_deref(), logs, &args)
+        }
         Command::Status => cmd_status(&runner, &cwd),
         Command::ShellInit { shell } => {
             print!("{}", cli::shell_init(shell));
@@ -138,8 +154,170 @@ fn cmd_complete(runner: &Runner, cwd: &Path, what: cli::CompleteArg, word: &str)
         cli::CompleteArg::Refs => {
             describe(workspace::ref_choices(&ws, runner, word).unwrap_or_default())
         }
+        cli::CompleteArg::Tasks => {
+            let Ok(entry) = run_branch(&ws, runner, cwd, None) else {
+                return Ok(());
+            };
+            let found = discover_tasks(&ws, runner, &entry);
+            if word.starts_with('@') {
+                for (repo, tasks) in &found {
+                    println!("@{repo}\tlist the tasks of {repo}");
+                    for task in tasks {
+                        let about = task.description.as_deref().unwrap_or_default();
+                        let about: String = about
+                            .lines()
+                            .next()
+                            .unwrap_or_default()
+                            .chars()
+                            .take(60)
+                            .collect();
+                        let about = format!("{} {about}", task.source.name());
+                        println!("@{repo}:{}\t{}", task.name, about.trim_end());
+                    }
+                }
+            } else {
+                for (name, repos) in run::by_name(&found) {
+                    println!("{name}\t{}", repos.join(", "));
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// `ws run`: list the tasks, or run the ones named, side by side.
+fn cmd_run(
+    runner: &Runner,
+    cwd: &Path,
+    targets: &[String],
+    branch: Option<&str>,
+    logs: Option<bool>,
+    args: &[String],
+) -> Result<()> {
+    let ws = Workspace::discover(cwd)?;
+    let entry = run_branch(&ws, runner, cwd, branch)?;
+    let found = discover_tasks(&ws, runner, &entry);
+
+    let targets: Vec<run::Target> = targets
+        .iter()
+        .map(|t| run::Target::parse(t))
+        .collect::<Result<_>>()?;
+    let listing: Vec<&str> = targets
+        .iter()
+        .filter_map(|t| match t {
+            run::Target::Repo { repo, task: None } => Some(repo.as_str()),
+            _ => None,
+        })
+        .collect();
+    if targets.is_empty() || listing.len() == targets.len() {
+        return run::list(&found, &listing, &entry.dir);
+    }
+    if !listing.is_empty() {
+        bail!("`@repo` lists a repository's tasks — name a task as `@repo:task` to run it");
+    }
+
+    let base = ws.worktree_root();
+    let branch_name = entry
+        .branch
+        .clone()
+        .unwrap_or_else(|| entry.dir_name(&base));
+    let tasks = Tasks::new(&ws.config.tasks, &ws.config.integrations);
+    let color = run::use_color(ws.config.tasks.color);
+    let mut jobs: Vec<run::Job> = Vec::new();
+    for (repo, task) in run::select(&found, &targets, &entry.dir)? {
+        if jobs.iter().any(|j| &j.repo == repo && j.task == task.name) {
+            continue;
+        }
+        let worktree = entry
+            .repos
+            .iter()
+            .find(|r| &r.name == repo)
+            .map(|r| r.path.clone())
+            .context("the repository has a worktree")?;
+        let mut cmd = tasks
+            .command(task, &worktree, args)
+            .env("WS_ROOT", ws.root.to_string_lossy())
+            .env("WS_BRANCH", branch_name.as_str())
+            .env("WS_BRANCH_DIR", entry.dir.to_string_lossy())
+            .env("WS_WORKTREE", worktree.to_string_lossy())
+            .env("WS_REPO", repo.as_str());
+        if color {
+            // Most tools stop colouring once their output is a pipe, which
+            // is what `ws` hands them; these ask them not to.
+            cmd = cmd.env("FORCE_COLOR", "1").env("CLICOLOR_FORCE", "1");
+        }
+        jobs.push(run::Job {
+            repo: repo.clone(),
+            task: task.name.clone(),
+            cmd,
+        });
+    }
+
+    let sinks = if logs.unwrap_or(ws.config.logs.enabled) && !runner.dry_run {
+        let logs = logs::Logs::new(&ws.config.logs, ws.logs_dir(&entry.dir), &branch_name);
+        let names: Vec<(&str, &str)> = jobs
+            .iter()
+            .map(|j| (j.repo.as_str(), j.task.as_str()))
+            .collect();
+        Some(logs.sinks(&names)?)
+    } else {
+        None
+    };
+    run::run(runner, &jobs, run::Options { color, sinks })
+}
+
+/// The branch directory `ws run` works in: the one named, the one the
+/// command was run from, or the default branch's.
+fn run_branch(
+    ws: &Workspace,
+    runner: &Runner,
+    cwd: &Path,
+    branch: Option<&str>,
+) -> Result<workspace::BranchStatus> {
+    let entries = workspace::list(ws, runner, false)?;
+    let base = ws.worktree_root();
+    if let Some(branch) = branch {
+        return entries
+            .into_iter()
+            .find(|e| e.branch.as_deref() == Some(branch) || e.dir_name(&base) == branch)
+            .with_context(|| format!("{branch} has no worktrees — `ws switch {branch}` first"));
+    }
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    if let Some(here) = entries.iter().find(|e| cwd.starts_with(&e.dir)) {
+        return Ok(here.clone());
+    }
+    let default = &ws.config.default_branch;
+    entries
+        .into_iter()
+        .find(|e| e.branch.as_deref() == Some(default))
+        .with_context(|| {
+            format!(
+                "not inside a branch directory and {default} has no worktrees — \
+                 pass --branch, or `ws switch {default}`"
+            )
+        })
+}
+
+/// The tasks of every repository in the branch directory, in the
+/// workspace's order — asked of each repository at once, since `just` and
+/// `task` are processes of their own.
+fn discover_tasks(
+    ws: &Workspace,
+    runner: &Runner,
+    entry: &workspace::BranchStatus,
+) -> Vec<(String, Vec<integration::tasks::Task>)> {
+    let tasks = Tasks::new(&ws.config.tasks, &ws.config.integrations);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = entry
+            .repos
+            .iter()
+            .map(|repo| {
+                let tasks = &tasks;
+                scope.spawn(move || (repo.name.clone(), tasks.discover(runner, &repo.path)))
+            })
+            .collect();
+        handles.into_iter().filter_map(|h| h.join().ok()).collect()
+    })
 }
 
 /// `value<tab>description`, the line both the shells and `ws` agree on.
@@ -385,6 +563,7 @@ fn cmd_status(runner: &Runner, cwd: &Path) -> Result<()> {
         active.push("local");
     }
     active.extend(PackageManagers::new(&ws.config.integrations).names());
+    let tasks = Tasks::new(&ws.config.tasks, &ws.config.integrations).names();
     println!(
         "tools      {}",
         if active.is_empty() {
@@ -393,6 +572,26 @@ fn cmd_status(runner: &Runner, cwd: &Path) -> Result<()> {
             active.join(", ")
         }
     );
+
+    println!(
+        "tasks      {}",
+        if tasks.is_empty() {
+            "(none)".to_string()
+        } else {
+            tasks.join(", ")
+        }
+    );
+    let logs = &ws.config.logs;
+    if logs.enabled {
+        println!(
+            "logs       {} (rotated at {}, {} kept)",
+            Path::new(&logs.dir).join(&logs.file).display(),
+            logs.max_size,
+            logs.keep
+        );
+    } else {
+        println!("logs       off");
+    }
 
     match workspace::current_branch(&ws, runner, cwd) {
         Some(entry) => {

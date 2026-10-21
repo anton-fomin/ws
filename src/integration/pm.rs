@@ -218,7 +218,7 @@ fn yarn_major(runner: &Runner, command: &[String], worktree: &Path) -> Option<u3
 }
 
 /// Whether one of the manager's lockfiles is in the worktree.
-fn marked_by(worktree: &Path, manager: Manager) -> bool {
+pub(crate) fn marked_by(worktree: &Path, manager: Manager) -> bool {
     manager
         .lockfiles()
         .iter()
@@ -227,7 +227,7 @@ fn marked_by(worktree: &Path, manager: Manager) -> bool {
 
 /// The manager named by `package.json`'s `packageManager` field, as corepack
 /// writes it: `"pnpm@9.1.0+sha512..."`.
-fn declared_manager(worktree: &Path) -> Option<Manager> {
+pub(crate) fn declared_manager(worktree: &Path) -> Option<Manager> {
     let text = std::fs::read_to_string(worktree.join("package.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&text).ok()?;
     let declared = json.get("packageManager")?.as_str()?;

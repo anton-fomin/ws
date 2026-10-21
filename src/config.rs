@@ -37,6 +37,10 @@ pub struct Config {
     pub ui: UiConfig,
     #[serde(default)]
     pub integrations: Integrations,
+    #[serde(default)]
+    pub tasks: TasksConfig,
+    #[serde(default)]
+    pub logs: LogsConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -512,6 +516,176 @@ pub enum Register {
     None,
 }
 
+/// Where `ws run` finds a repository's tasks, and how it shows them.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TasksConfig {
+    /// The sources a task name is looked up in, in order: the first one a
+    /// repository has the task in runs it. A source left out is not read.
+    pub order: Vec<TaskSource>,
+    pub just: TaskToolConfig,
+    pub task: TaskToolConfig,
+    pub package: PackageScriptsConfig,
+    /// Colour the prefixes — and let the tasks colour their own output,
+    /// which they stop doing once it goes through a pipe.
+    pub color: ColorMode,
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        TasksConfig {
+            order: TaskSource::ALL.to_vec(),
+            just: TaskToolConfig::default(),
+            task: TaskToolConfig::default(),
+            package: PackageScriptsConfig::default(),
+            color: ColorMode::Auto,
+        }
+    }
+}
+
+/// A file a repository declares its tasks in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskSource {
+    /// A `justfile`, run with `just`.
+    Just,
+    /// A `Taskfile.yml`, run with go-task's `task`.
+    Task,
+    /// The `scripts` of `package.json`, run with the repository's own
+    /// package manager.
+    Package,
+}
+
+impl TaskSource {
+    pub const ALL: [TaskSource; 3] = [TaskSource::Just, TaskSource::Task, TaskSource::Package];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TaskSource::Just => "just",
+            TaskSource::Task => "task",
+            TaskSource::Package => "package",
+        }
+    }
+}
+
+/// `just` or `task`: on when the program is on `PATH`, unless told otherwise.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TaskToolConfig {
+    pub enabled: Toggle,
+    /// Launcher; defaults to the tool's own name.
+    pub command: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PackageScriptsConfig {
+    /// `auto` means: whenever a repository has a `package.json`.
+    pub enabled: Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ColorMode {
+    /// When the output is a terminal and `NO_COLOR` is not set.
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+/// Where the output of `ws run` is kept, beyond the terminal.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LogsConfig {
+    pub enabled: bool,
+    /// `{branch_dir}` stands for the branch directory the tasks run in;
+    /// otherwise resolved like `bare_dir`.
+    pub dir: String,
+    /// The file inside `dir`, with `{branch}`, `{repo}` and `{task}` in it.
+    /// Tasks whose files coincide share one, each line marked with its task.
+    pub file: String,
+    /// A file is rotated once it would grow past this: `10MB`, `512K`, or a
+    /// number of bytes. `0` never rotates.
+    pub max_size: ByteSize,
+    /// Rotated files kept beside the live one, `<file>.1` the most recent.
+    pub keep: u32,
+    /// Start every line with the local time it was written.
+    pub timestamps: bool,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        LogsConfig {
+            enabled: false,
+            dir: def_logs_dir(),
+            file: "{repo}.{task}.log".into(),
+            max_size: ByteSize(10 * 1024 * 1024),
+            keep: 5,
+            timestamps: true,
+        }
+    }
+}
+
+/// A size written the way people write one: `10MB`, `512k`, `1GiB`, `4096`.
+/// The units are binary — a megabyte is 1024 kilobytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "SizeValue")]
+pub struct ByteSize(pub u64);
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SizeValue {
+    Number(u64),
+    Text(String),
+}
+
+impl TryFrom<SizeValue> for ByteSize {
+    type Error = String;
+
+    fn try_from(value: SizeValue) -> Result<Self, Self::Error> {
+        match value {
+            SizeValue::Number(n) => Ok(ByteSize(n)),
+            SizeValue::Text(text) => ByteSize::parse(&text),
+        }
+    }
+}
+
+impl ByteSize {
+    pub fn parse(text: &str) -> Result<ByteSize, String> {
+        let text = text.trim();
+        let split = text
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(text.len());
+        let (digits, unit) = text.split_at(split);
+        let number: u64 = digits
+            .parse()
+            .map_err(|_| format!("invalid size {text:?} — write it like 10MB or 512K"))?;
+        let shift = match unit.trim().to_ascii_lowercase().as_str() {
+            "" | "b" => 0,
+            "k" | "kb" | "kib" => 10,
+            "m" | "mb" | "mib" => 20,
+            "g" | "gb" | "gib" => 30,
+            other => return Err(format!("unknown size unit {other:?} in {text:?}")),
+        };
+        number
+            .checked_mul(1 << shift)
+            .map(ByteSize)
+            .ok_or_else(|| format!("size {text:?} is too large"))
+    }
+}
+
+impl std::fmt::Display for ByteSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (shift, unit) in [(30, "GB"), (20, "MB"), (10, "KB")] {
+            if self.0 >= 1 << shift && self.0.is_multiple_of(1 << shift) {
+                return write!(f, "{}{unit}", self.0 >> shift);
+            }
+        }
+        write!(f, "{}B", self.0)
+    }
+}
+
 /// `true` / `false` / `"auto"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
@@ -557,6 +731,13 @@ fn def_worktree_dir() -> String {
 fn def_local_dir() -> String {
     "local".into()
 }
+
+fn def_logs_dir() -> String {
+    format!("{BRANCH_DIR}/logs")
+}
+
+/// The placeholder `logs.dir` may start with.
+pub const BRANCH_DIR: &str = "{branch_dir}";
 
 /// Resolve a configured directory against the workspace root.
 ///
@@ -686,6 +867,31 @@ impl Workspace {
         resolve_dir(&self.root, &self.config.integrations.local.dir)
     }
 
+    /// Directory `ws run` writes the logs of `branch_dir` to.
+    pub fn logs_dir(&self, branch_dir: &Path) -> PathBuf {
+        match self.logs_in_branch_dir() {
+            Some(relative) => branch_dir.join(relative),
+            None => resolve_dir(&self.root, &self.config.logs.dir),
+        }
+    }
+
+    /// The logs directory inside a worktree, which is where they are when the
+    /// branch directory is the single repository's worktree.
+    pub fn logs_in_worktree(&self) -> Option<PathBuf> {
+        if self.is_grouped() {
+            return None;
+        }
+        self.logs_in_branch_dir()
+    }
+
+    /// Where the logs sit inside each branch directory, when `logs.dir`
+    /// puts them there: `logs` for the default `{branch_dir}/logs`.
+    pub fn logs_in_branch_dir(&self) -> Option<PathBuf> {
+        let dir = self.config.logs.dir.trim();
+        let rest = dir.strip_prefix(BRANCH_DIR)?;
+        Some(PathBuf::from(rest.trim_start_matches('/')))
+    }
+
     pub fn state_path(&self) -> PathBuf {
         self.root.join(STATE_DIR).join("state.yaml")
     }
@@ -773,6 +979,65 @@ impl Config {
                     rule.pattern
                 );
             }
+        }
+        for (name, tool) in [("just", &self.tasks.just), ("task", &self.tasks.task)] {
+            if tool.command.as_ref().is_some_and(Vec::is_empty) {
+                bail!("{}: tasks.{name}.command must not be empty", path.display());
+            }
+        }
+        let logs = &self.logs;
+        if logs.dir.trim().is_empty() || logs.file.trim().is_empty() {
+            bail!(
+                "{}: logs.dir and logs.file must not be empty",
+                path.display()
+            );
+        }
+        if logs.dir.contains(BRANCH_DIR) {
+            let dir = logs.dir.trim();
+            let rest = dir
+                .strip_prefix(BRANCH_DIR)
+                .filter(|rest| rest.starts_with('/'))
+                .map(|rest| rest.trim_start_matches('/'))
+                .filter(|rest| !rest.is_empty() && !rest.contains('{'));
+            let Some(rest) = rest else {
+                bail!(
+                    "{}: logs.dir: {BRANCH_DIR} has to start it and be followed by a \
+                     directory, like {BRANCH_DIR}/logs",
+                    path.display()
+                );
+            };
+            let rest = Path::new(rest);
+            if rest
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                bail!(
+                    "{}: logs.dir must stay inside the branch directory",
+                    path.display()
+                );
+            }
+            // In a branch directory of several repositories, the logs sit
+            // beside them and must not be one of them, or inside one.
+            let first = rest.components().next();
+            if let Some(repo) = self
+                .repos
+                .iter()
+                .find(|r| r.dir().components().next() == first)
+            {
+                bail!(
+                    "{}: logs.dir {} would be inside or around repository {}",
+                    path.display(),
+                    logs.dir,
+                    repo.name()
+                );
+            }
+        }
+        if Path::new(&logs.file).is_absolute()
+            || Path::new(&logs.file)
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            bail!("{}: logs.file must stay inside logs.dir", path.display());
         }
         for (manager, settings) in self.integrations.package_managers() {
             if settings.command.as_ref().is_some_and(Vec::is_empty) {
@@ -1040,7 +1305,46 @@ pub fn global_template() -> String {
      \x20 uv:\n\
      \x20   enabled: auto\n\
      \x20   command: [uv]\n\
-     \x20   # install: [sync]\n"
+     \x20   # install: [sync]\n\
+     \n\
+     # `ws run <task>` runs a task in every repository of the branch directory\n\
+     # that has it, side by side; `ws run @repo:task` in that one alone.\n\
+     tasks:\n\
+     \x20 # Where a task name is looked up, in order — the first source a\n\
+     \x20 # repository has it in runs it:\n\
+     \x20 #   just     a justfile, run with `just`\n\
+     \x20 #   task     a Taskfile.yml, run with go-task's `task`\n\
+     \x20 #   package  package.json scripts, run with the repository's own\n\
+     \x20 #            yarn, pnpm or npm\n\
+     \x20 order: [just, task, package]\n\
+     \x20 just:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [just]\n\
+     \x20 task:\n\
+     \x20   enabled: auto\n\
+     \x20   command: [task]\n\
+     \x20 # `auto` means \"when the repository has a package.json\".\n\
+     \x20 package:\n\
+     \x20   enabled: auto\n\
+     \x20 # Coloured prefixes, and FORCE_COLOR for the tasks so they keep\n\
+     \x20 # theirs through the pipe: auto | always | never\n\
+     \x20 color: auto\n\
+     \n\
+     # Everything `ws run` prints, also written to files — without colours.\n\
+     logs:\n\
+     \x20 enabled: false\n\
+     \x20 # {branch_dir} is the branch directory the tasks run in, and `ws rm`\n\
+     \x20 # takes its logs along; anything else is resolved like bare_dir.\n\
+     \x20 dir: \"{branch_dir}/logs\"\n\
+     \x20 # Inside dir; placeholders {branch} {repo} {task}. Tasks that land in\n\
+     \x20 # the same file share it, each line marked with its task.\n\
+     \x20 file: \"{repo}.{task}.log\"\n\
+     \x20 # A file past max_size moves to <file>.1, the one before to .2, and\n\
+     \x20 # so on; `keep` of them are kept. 10MB, 512K, or bytes; 0 never rotates.\n\
+     \x20 max_size: 10MB\n\
+     \x20 keep: 5\n\
+     \x20 # Start every line with the local time it was written.\n\
+     \x20 timestamps: true\n"
         .to_string()
 }
 
@@ -1216,6 +1520,80 @@ mod tests {
     }
 
     #[test]
+    fn sizes_read_the_way_people_write_them() {
+        for (text, want) in [
+            ("4096", 4096),
+            ("512K", 512 * 1024),
+            ("10MB", 10 << 20),
+            ("10 mb", 10 << 20),
+            ("1GiB", 1 << 30),
+            ("0", 0),
+        ] {
+            assert_eq!(ByteSize::parse(text), Ok(ByteSize(want)), "{text}");
+        }
+        for bad in ["", "MB", "10XB", "-1"] {
+            assert!(ByteSize::parse(bad).is_err(), "{bad:?} should be rejected");
+        }
+        let cfg = parse("logs:\n  max_size: 2048\n").unwrap();
+        assert_eq!(cfg.logs.max_size, ByteSize(2048));
+        assert!(parse("logs:\n  max_size: lots\n").is_err());
+        assert_eq!(ByteSize(10 << 20).to_string(), "10MB");
+        assert_eq!(ByteSize(1500).to_string(), "1500B");
+    }
+
+    #[test]
+    fn logs_default_to_the_branch_directory() {
+        let ws = Workspace {
+            root: PathBuf::from("/w"),
+            config: parse("").unwrap(),
+            sources: Vec::new(),
+        };
+        assert_eq!(ws.logs_in_branch_dir(), Some(PathBuf::from("logs")));
+        assert_eq!(
+            ws.logs_dir(Path::new("/w/main")),
+            PathBuf::from("/w/main/logs")
+        );
+        let ws = Workspace {
+            config: parse("logs:\n  dir: logs\n").unwrap(),
+            ..ws
+        };
+        assert_eq!(ws.logs_in_branch_dir(), None);
+        assert_eq!(ws.logs_dir(Path::new("/w/main")), PathBuf::from("/w/logs"));
+    }
+
+    #[test]
+    fn a_branch_logs_directory_stays_out_of_the_repositories() {
+        for bad in [
+            "{branch_dir}",
+            "{branch_dir}/",
+            "{branch_dir}/../x",
+            "x/{branch_dir}/logs",
+            "{branch_dir}/api",
+            "{branch_dir}/api/logs",
+            "{branch_dir}/services",
+        ] {
+            let cfg = parse(&format!(
+                "repos:\n  - url: x/api.git\n  - url: x/web.git\n    path: services/web\n\
+                 logs:\n  dir: {}\n",
+                quoted(bad)
+            ))
+            .unwrap();
+            assert!(cfg.validate(Path::new(CONFIG_FILE)).is_err(), "{bad}");
+        }
+        let cfg =
+            parse("repos:\n  - url: x/api.git\nlogs:\n  dir: \"{branch_dir}/.logs\"\n").unwrap();
+        cfg.validate(Path::new(CONFIG_FILE)).unwrap();
+    }
+
+    #[test]
+    fn a_log_file_may_not_leave_the_logs_directory() {
+        for bad in ["/tmp/x.log", "../x.log", "{branch}/../../x.log"] {
+            let cfg = parse(&format!("logs:\n  file: {}\n", quoted(bad))).unwrap();
+            assert!(cfg.validate(Path::new(CONFIG_FILE)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn unknown_keys_are_rejected() {
         assert!(parse("nope: 1\n").is_err());
     }
@@ -1262,6 +1640,18 @@ mod tests {
         assert_eq!(global.ui.picker_cmd, defaults.ui.picker_cmd);
         assert_eq!(global.ui.popup.width, defaults.ui.popup.width);
         assert_eq!(global.ui.popup.height, defaults.ui.popup.height);
+
+        assert_eq!(global.tasks.order, defaults.tasks.order);
+        assert_eq!(global.tasks.just.enabled, defaults.tasks.just.enabled);
+        assert_eq!(global.tasks.task.enabled, defaults.tasks.task.enabled);
+        assert_eq!(global.tasks.package.enabled, defaults.tasks.package.enabled);
+        assert_eq!(global.tasks.color, defaults.tasks.color);
+        assert_eq!(global.logs.enabled, defaults.logs.enabled);
+        assert_eq!(global.logs.dir, defaults.logs.dir);
+        assert_eq!(global.logs.file, defaults.logs.file);
+        assert_eq!(global.logs.max_size, defaults.logs.max_size);
+        assert_eq!(global.logs.keep, defaults.logs.keep);
+        assert_eq!(global.logs.timestamps, defaults.logs.timestamps);
 
         let (written, fallback) = (&global.integrations, &defaults.integrations);
         assert_eq!(written.zoxide.enabled, fallback.zoxide.enabled);

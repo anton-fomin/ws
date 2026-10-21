@@ -127,6 +127,29 @@ pub enum Command {
         force: bool,
     },
 
+    /// Run a task from the repositories' justfile, Taskfile or package.json.
+    #[command(alias = "r")]
+    Run {
+        /// `task` runs it in every repository that has it, side by side;
+        /// `@repo:task` in that repository only; `@repo` lists its tasks.
+        /// Omit to list every task.
+        #[arg(value_name = "TASK")]
+        targets: Vec<String>,
+        /// Branch directory to run in; defaults to the one you are in, then
+        /// the default branch.
+        #[arg(short, long)]
+        branch: Option<String>,
+        /// Write the output to the log files, whatever `logs.enabled` says.
+        #[arg(long, conflicts_with = "no_logs")]
+        logs: bool,
+        /// Keep the output out of the log files.
+        #[arg(long)]
+        no_logs: bool,
+        /// Arguments passed on to the task, after `--`.
+        #[arg(last = true, value_name = "ARGS")]
+        args: Vec<String>,
+    },
+
     /// Show the workspace and branch for the current directory.
     Status,
 
@@ -159,6 +182,8 @@ pub enum CompleteArg {
     Branches,
     /// What `--from` takes: the branches and the tags.
     Refs,
+    /// What `ws run` takes: task names, or `@repo:task` once `@` is typed.
+    Tasks,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -211,6 +236,9 @@ const WORKTREE_ARG: &[&str] = &["rm", "remove", "path"];
 /// and so is completed from every branch of the workspace.
 const BRANCH_ARG: &[&str] = &["switch", "sw"];
 
+/// Subcommands that take task names.
+const RUN_ARG: &[&str] = &["run", "r"];
+
 /// zsh is handed the branch positional as `:branch:_default`, which completes
 /// file names. The two required ones — `ws rm` and `ws path` — are rewritten
 /// to ask `ws` instead; `ws switch` has an optional branch, written
@@ -229,6 +257,12 @@ fn zsh_addendum(script: String) -> String {
                 line.replace(":_default'", ":_ws_branches'")
             } else if trimmed.starts_with("'--from=") {
                 line.replace(":REF:_default'", ":REF:_ws_refs'")
+            } else if trimmed.starts_with("'*::targets ") {
+                line.replace(":_default'", ":_ws_tasks'")
+            } else if trimmed.starts_with("'-b+[Branch directory")
+                || trimmed.starts_with("'--branch=[Branch directory")
+            {
+                line.replace(":BRANCH:_default'", ":BRANCH:_ws_worktrees'")
             } else {
                 line.to_string()
             }
@@ -251,6 +285,20 @@ _ws_refs() {{
     _ws_candidates refs ref
 }}
 
+_ws_tasks() {{
+    # `@repo:task` holds a colon, which _describe would take for the start of
+    # the description.
+    local -a candidates
+    local line name
+    for line in ${{(f)"$(command ws __complete tasks ${{(q)PREFIX}} 2>/dev/null)"}}; do
+        [[ -n "$line" ]] || continue
+        name="${{line%%$'\t'*}}"
+        candidates+=("${{name//:/\\:}}:${{line#*$'\t'}}")
+    done
+    (( ${{#candidates}} )) || return 1
+    _describe -t tasks task candidates
+}}
+
 _ws_candidates() {{
     local -a candidates
     local line
@@ -271,6 +319,10 @@ complete -c ws -n "__fish_ws_using_subcommand path" -f -a "(ws __complete worktr
 complete -c ws -n "__fish_ws_using_subcommand switch" -f -a "(ws __complete branches)"
 complete -c ws -n "__fish_ws_using_subcommand switch" -l from -r -f \
     -a "(ws __complete refs (commandline --current-token))"
+complete -c ws -n "__fish_ws_using_subcommand run" -f \
+    -a "(ws __complete tasks (commandline --current-token))"
+complete -c ws -n "__fish_ws_using_subcommand run" -s b -l branch -r -f \
+    -a "(ws __complete worktrees)"
 "#;
 
 /// What bash cannot do by itself, bolted onto the generated script.
@@ -303,6 +355,7 @@ fn bash_addendum(command: &clap::Command) -> String {
     }
     let branch_arg = BRANCH_ARG.join(" | ");
     let worktree_arg = WORKTREE_ARG.join(" | ");
+    let run_arg = format!("@({})", RUN_ARG.join("|"));
     format!(
         r#"
 # Descriptions, by the subcommand already on the line and the candidate.
@@ -360,12 +413,13 @@ _ws_argument_index() {{
 # exist, every branch of the workspace, or what `--from` takes. `ws` prints
 # nothing outside a workspace.
 _ws_candidates() {{
-    local what="$1" word="$2" line name description
+    local what="$1" word="$2" strip="${{3:-}}" line name description
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         name="${{line%%$'\t'*}}"
         description="${{line#*$'\t'}}"
         [[ "$name" == "$word"* ]] || continue
+        name="${{name#"$strip"}}"
         [[ -n "$description" && "$description" != "$name" ]] &&
             _ws_branch_description["$name"]="$description"
         COMPREPLY+=("$name")
@@ -400,6 +454,26 @@ _ws_prefer_commands() {{
     if [[ -n "$candidates" ]]; then
         COMPREPLY=()
         _ws_candidates "$candidates" "$cur"
+    fi
+
+    # `ws run`: task names, and `@repo:task`. bash splits words at a colon,
+    # so the word is read back from the line, and only what follows its last
+    # colon is offered — that is the part bash replaces.
+    if [[ "$context" == {run_arg} ]]; then
+        local typed="${{COMP_LINE:0:COMP_POINT}}" word i after=
+        typed="${{typed##*[[:space:]]}}"
+        for (( i = 1; i < COMP_CWORD; i++ )); do
+            [[ "${{COMP_WORDS[i]}}" == "--" ]] && after=yes
+        done
+        if [[ "$prev" == "-b" || "$prev" == "--branch" ]]; then
+            COMPREPLY=()
+            _ws_candidates worktrees "$cur"
+        elif [[ -z "$after" && "$typed" != -* ]]; then
+            COMPREPLY=()
+            local strip=
+            [[ "$typed" == *:* ]] && strip="${{typed%:*}}:"
+            _ws_candidates tasks "$typed" "$strip"
+        fi
     fi
 
     if [[ "$cur" != -* ]]; then

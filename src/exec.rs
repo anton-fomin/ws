@@ -83,7 +83,7 @@ impl Cmd {
         shell_words::join(parts.iter().map(String::as_str))
     }
 
-    fn build(&self) -> Command {
+    pub fn build(&self) -> Command {
         let mut c = Command::new(&self.program);
         c.args(self.args.iter().map(OsStr::new));
         if let Some(dir) = &self.cwd {
@@ -93,7 +93,7 @@ impl Cmd {
         c
     }
 
-    fn spawn_error(&self, e: std::io::Error) -> anyhow::Error {
+    pub fn spawn_error(&self, e: std::io::Error) -> anyhow::Error {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!("`{}` not found in PATH", self.program)
         } else {

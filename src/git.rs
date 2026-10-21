@@ -253,12 +253,17 @@ pub fn set_upstream(runner: &Runner, worktree: &Path, branch: &str) -> Result<()
 /// branch directory is the worktree, so the marker sits among the files
 /// there, and it is not a reason to call the worktree dirty or to refuse to
 /// remove it.
-pub fn is_dirty(runner: &Runner, worktree: &Path) -> bool {
+/// Whether a worktree has changes of its own — not counting what `ws` puts
+/// there itself: the branch marker, and `own`, the logs directory of a branch
+/// directory that is also the worktree.
+pub fn is_dirty(runner: &Runner, worktree: &Path, own: Option<&Path>) -> bool {
     let marker = format!("?? {}", crate::marker::BRANCH_FILE);
+    let own = own.map(|dir| format!("?? {}/", dir.to_string_lossy()));
     match runner.try_capture(&git(worktree).args(["status", "--porcelain"])) {
-        Ok(Some(out)) => out
-            .lines()
-            .any(|line| !line.trim().is_empty() && line.trim() != marker),
+        Ok(Some(out)) => out.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && line != marker && Some(line) != own.as_deref()
+        }),
         _ => false,
     }
 }

@@ -127,16 +127,25 @@ pub fn switch(
     let local = Local::new(ws);
     // With the branch directories in the workspace root, a branch can share
     // its name with the local directory — and would be checked out into it.
-    if branch_dir == ws.local_dir()
-        && branch_dir.exists()
-        && !branch_dir.join(".git").exists()
-        && Marker::load(&branch_dir).is_none()
-    {
-        bail!(
-            "branch {branch} would be checked out into the local files directory {} — \
-             set integrations.local.dir to somewhere else",
-            branch_dir.display()
-        );
+    for (dir, what, key) in [
+        (
+            ws.local_dir(),
+            "the local files directory",
+            "integrations.local.dir",
+        ),
+        (ws.logs_dir(&branch_dir), "the logs directory", "logs.dir"),
+    ] {
+        if branch_dir == dir
+            && branch_dir.exists()
+            && !branch_dir.join(".git").exists()
+            && Marker::load(&branch_dir).is_none()
+        {
+            bail!(
+                "branch {branch} would be checked out into {what} {} — \
+                 set {key} to somewhere else",
+                branch_dir.display()
+            );
+        }
     }
 
     for repo in &ws.config.repos {
@@ -454,7 +463,8 @@ pub fn list(ws: &Workspace, runner: &Runner, with_status: bool) -> Result<Vec<Br
             let Some(dir) = paths::branch_dir_of(&wt.path, &repo_dir, grouped) else {
                 continue;
             };
-            let dirty = with_status && git::is_dirty(runner, &wt.path);
+            let dirty =
+                with_status && git::is_dirty(runner, &wt.path, ws.logs_in_worktree().as_deref());
             by_dir.entry(dir).or_default().push(RepoStatus {
                 name: name.clone(),
                 path: wt.path,
@@ -722,7 +732,7 @@ pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Res
     for repo in &ws.config.repos {
         let name = repo.name();
         let path = paths::worktree_path(&base, branch, mode, grouped, &repo.dir());
-        if path.exists() && git::is_dirty(runner, &path) {
+        if path.exists() && git::is_dirty(runner, &path, ws.logs_in_worktree().as_deref()) {
             dirty.push(name.clone());
         }
         worktrees.push((name, path));
@@ -740,6 +750,16 @@ pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Res
     // untracked file and keep the directory from being removed.
     if !runner.dry_run {
         let _ = std::fs::remove_file(branch_dir.join(marker::BRANCH_FILE));
+        // The branch's logs go with it; they would keep the directory — and
+        // with a single repository, the worktree — from being removed.
+        if let Some(logs) = ws.logs_in_branch_dir() {
+            let logs = branch_dir.join(logs);
+            if logs.is_dir() && !logs.join(".git").exists() {
+                if let Err(e) = std::fs::remove_dir_all(&logs) {
+                    eprintln!("warning: cannot remove {}: {e}", logs.display());
+                }
+            }
+        }
     }
 
     for (repo, path) in &worktrees {
