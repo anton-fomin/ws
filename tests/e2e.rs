@@ -637,6 +637,38 @@ fn init_writes_a_parseable_config() {
 }
 
 #[test]
+fn init_suggests_the_agent_skill_until_it_is_installed() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("work");
+    let home = tmp.path().join("home");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&home).unwrap();
+
+    let init = |args: &[&str]| {
+        let out = ws(&root)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .args(args)
+            .assert()
+            .success();
+        String::from_utf8(out.get_output().stderr.clone()).unwrap()
+    };
+    let stderr = init(&["init"]);
+    assert!(stderr.contains("ws skill >"), "{stderr}");
+
+    // `ws skill` prints what the hint says to save, frontmatter first.
+    let skill = ws(&root).arg("skill").assert().success();
+    let skill = String::from_utf8(skill.get_output().stdout.clone()).unwrap();
+    assert!(skill.starts_with("---\nname: ws\n"), "{skill:.40}");
+
+    let installed = home.join(".claude/skills/ws");
+    fs::create_dir_all(&installed).unwrap();
+    fs::write(installed.join("SKILL.md"), &skill).unwrap();
+    let stderr = init(&["init", "--force"]);
+    assert!(!stderr.contains("ws skill"), "{stderr}");
+}
+
+#[test]
 fn completion_scripts_are_emitted_for_every_supported_shell() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();

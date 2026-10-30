@@ -109,6 +109,10 @@ fn run() -> Result<()> {
             cli::completions(shell, &mut std::io::stdout());
             Ok(())
         }
+        Command::Skill => {
+            print!("{SKILL}");
+            Ok(())
+        }
         Command::Complete { what, word } => {
             cmd_complete(&runner, &cwd, what, word.as_deref().unwrap_or_default())
         }
@@ -415,6 +419,7 @@ fn cmd_init(
         ),
         None => {}
     }
+    suggest_skill();
     Ok(())
 }
 
@@ -440,7 +445,31 @@ fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
     }
     std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     eprintln!("wrote {}", path.display());
+    suggest_skill();
     Ok(())
+}
+
+/// The agent skill, embedded so that `ws skill` works wherever the binary does.
+const SKILL: &str = include_str!("../skills/ws/SKILL.md");
+
+/// Point at `ws skill` while Claude Code has no copy of it. Only a hint:
+/// `~/.claude` is the user's, not something `ws` writes into on its own.
+fn suggest_skill() {
+    let base = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
+        _ => match std::env::var_os("HOME") {
+            Some(home) => Path::new(&home).join(".claude"),
+            None => return,
+        },
+    };
+    let dir = base.join("skills").join("ws");
+    if dir.join("SKILL.md").exists() {
+        return;
+    }
+    eprintln!(
+        "coding agents can learn ws from its skill; for Claude Code:\n  mkdir -p '{0}' && ws skill > '{0}/SKILL.md'",
+        dir.display()
+    );
 }
 
 /// Shared by `ws switch` and a branch chosen in the picker.

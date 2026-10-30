@@ -159,6 +159,9 @@ pub enum Command {
     /// Print the completion script for a shell.
     Completions { shell: ShellArg },
 
+    /// Print the skill that teaches a coding agent to work in a workspace.
+    Skill,
+
     /// Preview text for the fzf picker.
     #[command(hide = true, name = "__preview")]
     Preview { payload: String },

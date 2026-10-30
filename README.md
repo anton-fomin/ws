@@ -189,6 +189,7 @@ cannot drift. `.ws/state.yaml` only records which `setup` commands have run.
 | `ws status` | where am I |
 | `ws shell-init <shell>` | shell wrapper so `ws switch` also `cd`s |
 | `ws completions <shell>` | completion script for bash, zsh or fish |
+| `ws skill` | the skill that teaches a coding agent to use `ws` |
 
 Global flags: `--dry-run` prints the git/tmux/herdr commands instead of running
 the mutating ones, `--mux <backend>` overrides the multiplexer, `-v` echoes
@@ -753,6 +754,20 @@ mux:
 `WS_TMUX_CMD`, `WS_HERDR_CMD`, `WS_ZOXIDE_CMD`, `WS_YARN_CMD`, `WS_PNPM_CMD`,
 `WS_NPM_CMD`, `WS_UV_CMD`, `WS_JUST_CMD`, `WS_TASK_CMD` and `WS_PICKER_CMD`
 override those at runtime.
+
+## Coding agents
+
+`ws skill` prints a skill that teaches an agent working inside a workspace how
+to find its way around: `ws status` to orient, `ws switch --cd` instead of
+`git switch`, `ws run` for tasks, and which local files are shared symlinks.
+It is built into the binary from [`skills/ws/SKILL.md`](skills/ws/SKILL.md).
+`ws init` suggests installing it while Claude Code has no copy:
+
+```
+mkdir -p ~/.claude/skills/ws && ws skill > ~/.claude/skills/ws/SKILL.md
+```
+
+Run it again after upgrading `ws` to pick up a newer skill.
 
 ## Development
 
