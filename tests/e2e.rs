@@ -5,6 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+/// A temporary directory at its canonical path. On macOS the temp dir is under
+/// `/var`, a symlink to `/private/var`, and `ws` reports the resolved paths.
+fn tempdir() -> TempDir {
+    TempDir::new_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
+}
+
 fn git(dir: &Path, args: &[&str]) {
     let out = std::process::Command::new("git")
         .args(["-c", "user.email=ws@example.com", "-c", "user.name=ws"])
@@ -67,7 +73,7 @@ fn write_config(root: &Path, body: &str) {
 
 #[test]
 fn multi_repo_switch_creates_grouped_worktrees_and_runs_setup() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -160,7 +166,7 @@ repos:
 
 #[test]
 fn single_repo_uses_the_branch_directory_as_the_worktree() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -179,7 +185,7 @@ fn single_repo_uses_the_branch_directory_as_the_worktree() {
 
 #[test]
 fn nested_branch_dirs_keep_the_hierarchy() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -204,7 +210,7 @@ fn nested_branch_dirs_keep_the_hierarchy() {
 
 #[test]
 fn a_new_branch_forks_from_the_base_and_tracks_nothing() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -231,7 +237,7 @@ fn a_new_branch_forks_from_the_base_and_tracks_nothing() {
 
 #[test]
 fn dirty_worktrees_are_protected_from_rm() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -258,7 +264,7 @@ fn dirty_worktrees_are_protected_from_rm() {
 
 #[test]
 fn zoxide_registers_and_forgets_the_paths() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -313,7 +319,7 @@ fn zoxide_registers_and_forgets_the_paths() {
 
 #[test]
 fn picker_selection_switches_to_the_chosen_branch() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -340,7 +346,7 @@ fn picker_selection_switches_to_the_chosen_branch() {
 
 #[test]
 fn preview_describes_a_branch() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -364,7 +370,7 @@ fn preview_describes_a_branch() {
 
 #[test]
 fn worktrees_go_under_the_configured_base_directory() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -420,7 +426,7 @@ fn worktrees_go_under_the_configured_base_directory() {
 
 #[test]
 fn a_worktree_outside_the_root_still_finds_its_workspace() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -457,7 +463,7 @@ fn a_worktree_outside_the_root_still_finds_its_workspace() {
 
 #[test]
 fn the_global_configuration_supplies_settings_and_the_workspace_overrides_them() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -516,7 +522,7 @@ fn the_global_configuration_supplies_settings_and_the_workspace_overrides_them()
 
 #[test]
 fn repositories_are_refused_in_the_global_configuration() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let global = tmp.path().join("config.yaml");
     fs::write(&global, "repos:\n  - name: api\n    url: x/api.git\n").unwrap();
 
@@ -532,7 +538,7 @@ fn repositories_are_refused_in_the_global_configuration() {
 
 #[test]
 fn a_missing_global_configuration_is_not_an_error() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -553,7 +559,7 @@ fn a_missing_global_configuration_is_not_an_error() {
 
 #[test]
 fn init_global_writes_a_settings_file_without_repositories() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let global = tmp.path().join("config/ws/config.yaml");
     let root = tmp.path().join("work");
     fs::create_dir_all(&root).unwrap();
@@ -599,7 +605,7 @@ fn init_global_writes_a_settings_file_without_repositories() {
 
 #[test]
 fn init_writes_a_parseable_config() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let root = tmp.path().join("fresh");
     fs::create_dir_all(&root).unwrap();
 
@@ -643,7 +649,7 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
             .unwrap();
     // Claude Code, OpenCode, and the shared Agent Skills directory.
     for installed in [".claude", ".config/opencode", ".agents"] {
-        let tmp = TempDir::new().unwrap();
+        let tmp = tempdir();
         let root = tmp.path().join("work");
         let home = tmp.path().join("home");
         fs::create_dir_all(&root).unwrap();
@@ -675,7 +681,7 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
 
 #[test]
 fn completion_scripts_are_emitted_for_every_supported_shell() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let root = tmp.path().to_path_buf();
 
     // The zsh script has to carry the `#compdef` tag, or compinit ignores it.
@@ -755,7 +761,7 @@ fn completion_scripts_are_emitted_for_every_supported_shell() {
 
 #[test]
 fn completion_candidates_are_the_branches_with_worktrees() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -840,7 +846,7 @@ fn completion_candidates_are_the_branches_with_worktrees() {
 
 #[test]
 fn from_starts_a_new_branch_at_a_tag_a_remote_ref_or_a_commit() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -901,7 +907,7 @@ fn from_starts_a_new_branch_at_a_tag_a_remote_ref_or_a_commit() {
 
 #[test]
 fn from_must_be_in_every_repository_before_anything_is_created() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -934,7 +940,7 @@ fn from_must_be_in_every_repository_before_anything_is_created() {
 
 #[test]
 fn a_new_branch_forks_from_the_branch_directory_it_was_started_in() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -983,7 +989,7 @@ fn a_new_branch_forks_from_the_branch_directory_it_was_started_in() {
 
 #[test]
 fn the_branch_marker_names_the_directory_it_is_in() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -1093,7 +1099,7 @@ fn single_repo_workspace(tmp: &Path, origin: &Path) -> PathBuf {
 
 #[test]
 fn pnpm_installs_frozen_and_seeds_from_the_branch_you_came_from() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("pnpm-lock.yaml", "")]);
     let root = single_repo_workspace(tmp.path(), &origin);
     let log = tmp.path().join("pnpm.log");
@@ -1146,7 +1152,7 @@ fn pnpm_installs_frozen_and_seeds_from_the_branch_you_came_from() {
 
 #[test]
 fn seeding_falls_back_to_the_default_branch() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("pnpm-lock.yaml", "")]);
     git(&origin, &["branch", "other"]);
     let root = single_repo_workspace(tmp.path(), &origin);
@@ -1167,7 +1173,7 @@ fn seeding_falls_back_to_the_default_branch() {
 
 #[test]
 fn npm_runs_ci_and_does_not_seed_what_ci_would_delete() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("package-lock.json", "{}")]);
     let root = single_repo_workspace(tmp.path(), &origin);
     let log = tmp.path().join("npm.log");
@@ -1197,7 +1203,7 @@ fn npm_runs_ci_and_does_not_seed_what_ci_would_delete() {
 #[test]
 fn yarn_gets_the_lockfile_flag_its_version_understands() {
     for (version, flag) in [("4.1.0", "--immutable"), ("1.22.19", "--frozen-lockfile")] {
-        let tmp = TempDir::new().unwrap();
+        let tmp = tempdir();
         let origin = node_repo(tmp.path(), "app", &[("yarn.lock", "")]);
         let root = single_repo_workspace(tmp.path(), &origin);
         let log = tmp.path().join("yarn.log");
@@ -1218,7 +1224,7 @@ fn yarn_gets_the_lockfile_flag_its_version_understands() {
 
 #[test]
 fn a_failed_install_warns_but_still_switches() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("pnpm-lock.yaml", "")]);
     let root = single_repo_workspace(tmp.path(), &origin);
     let pnpm = stub(tmp.path(), "pnpm-stub", "exit 1");
@@ -1235,7 +1241,7 @@ fn a_failed_install_warns_but_still_switches() {
 
 #[test]
 fn no_setup_skips_the_package_managers_too() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("pnpm-lock.yaml", "")]);
     let root = single_repo_workspace(tmp.path(), &origin);
     let log = tmp.path().join("pnpm.log");
@@ -1251,7 +1257,7 @@ fn no_setup_skips_the_package_managers_too() {
 
 #[test]
 fn a_disabled_manager_does_nothing() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = node_repo(tmp.path(), "app", &[("pnpm-lock.yaml", "")]);
     let root = single_repo_workspace(tmp.path(), &origin);
     fs::write(
@@ -1275,14 +1281,14 @@ fn a_disabled_manager_does_nothing() {
 
 #[test]
 fn the_old_top_level_zoxide_key_is_rejected() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     write_config(tmp.path(), "zoxide:\n  enabled: false\n");
     ws(tmp.path()).arg("status").assert().failure();
 }
 
 #[test]
 fn local_files_go_into_every_repository_of_a_grouped_workspace() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -1335,7 +1341,7 @@ integrations:
 
 #[test]
 fn a_single_repository_gets_the_whole_local_directory() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = origin_repo(tmp.path(), "app");
     let root = single_repo_workspace(tmp.path(), &origin);
     fs::create_dir_all(root.join("local")).unwrap();
@@ -1350,7 +1356,7 @@ fn a_single_repository_gets_the_whole_local_directory() {
 
 #[test]
 fn a_branch_named_like_the_local_directory_is_refused() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = origin_repo(tmp.path(), "app");
     git(&origin, &["branch", "local"]);
     let root = single_repo_workspace(tmp.path(), &origin);
@@ -1363,7 +1369,7 @@ fn a_branch_named_like_the_local_directory_is_refused() {
 
 #[test]
 fn setup_interpolates_and_runs_multi_line_scripts_strictly() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let api = origin_repo(&origins, "api");
@@ -1425,7 +1431,7 @@ fn setup_interpolates_and_runs_multi_line_scripts_strictly() {
 
 #[test]
 fn setup_env_defaults_and_escaped_placeholders() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = origin_repo(tmp.path(), "app");
     let root = tmp.path().join("work");
     fs::create_dir_all(&root).unwrap();
@@ -1457,7 +1463,7 @@ fn setup_env_defaults_and_escaped_placeholders() {
 
 #[test]
 fn an_unset_variable_without_a_default_names_the_way_out() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origin = origin_repo(tmp.path(), "app");
     let root = tmp.path().join("work");
     fs::create_dir_all(&root).unwrap();
@@ -1562,7 +1568,7 @@ fn ws_tasks(root: &Path, bin: &Path) -> Command {
 
 #[test]
 fn run_lists_the_tasks_of_every_repository() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let (root, bin) = task_workspace(tmp.path(), "");
 
     let out = ws_tasks(&root, &bin).arg("run").output().unwrap();
@@ -1601,7 +1607,7 @@ fn run_lists_the_tasks_of_every_repository() {
 
 #[test]
 fn run_runs_a_task_everywhere_it_exists_with_a_prefix_per_repository() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let (root, bin) = task_workspace(tmp.path(), "");
 
     let out = ws_tasks(&root, &bin).args(["run", "dev"]).output().unwrap();
@@ -1652,7 +1658,7 @@ fn run_runs_a_task_everywhere_it_exists_with_a_prefix_per_repository() {
 
 #[test]
 fn run_fails_when_a_task_fails_or_does_not_exist() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let (root, bin) = task_workspace(tmp.path(), "");
 
     let out = ws_tasks(&root, &bin)
@@ -1687,10 +1693,15 @@ fn run_fails_when_a_task_fails_or_does_not_exist() {
 
 #[test]
 fn run_logs_every_task_to_its_own_rotated_file() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
+    // The header line names the stub npm by its absolute path, so one run's
+    // log grows with the temp dir's path, which is long on macOS.
+    let max_size = 100 + tmp.path().as_os_str().len();
     let (root, bin) = task_workspace(
         tmp.path(),
-        "logs:\n  enabled: true\n  max_size: 100\n  keep: 1\n  timestamps: false\n",
+        &format!(
+            "logs:\n  enabled: true\n  max_size: {max_size}\n  keep: 1\n  timestamps: false\n"
+        ),
     );
 
     ws_tasks(&root, &bin)
@@ -1713,7 +1724,7 @@ fn run_logs_every_task_to_its_own_rotated_file() {
     assert_eq!(lines[3], "--- exited with code 0 ---", "{text}");
     assert!(root.join("main/logs/api.dev.log").is_file());
 
-    // The second run pushes the file past 100 bytes: what it had moves to
+    // The second run pushes the file past max_size: what it had moves to
     // `.1`, and with `keep: 1` nothing older survives.
     ws_tasks(&root, &bin)
         .args(["run", "@web:dev"])
@@ -1726,7 +1737,7 @@ fn run_logs_every_task_to_its_own_rotated_file() {
     assert!(root.join("main/logs/web.dev.log.1").is_file());
     assert!(!root.join("main/logs/web.dev.log.2").exists());
     let current = fs::read_to_string(&log).unwrap();
-    assert!(current.len() <= 100, "{current}");
+    assert!(current.len() <= max_size, "{current}");
 
     // --no-logs keeps a run out of them.
     fs::remove_dir_all(root.join("main/logs")).unwrap();
@@ -1747,7 +1758,7 @@ fn run_logs_every_task_to_its_own_rotated_file() {
 
 #[test]
 fn run_logs_in_a_single_repository_do_not_dirty_its_worktree() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let origins = tmp.path().join("origins");
     fs::create_dir_all(&origins).unwrap();
     let web = origin_repo_with(
@@ -1789,7 +1800,7 @@ fn run_logs_in_a_single_repository_do_not_dirty_its_worktree() {
 
 #[test]
 fn run_logs_can_be_kept_in_the_workspace_root_instead() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let (root, bin) = task_workspace(
         tmp.path(),
         "logs:\n  enabled: true\n  dir: logs\n  file: \"{branch}/{repo}.{task}.log\"\n",
@@ -1804,7 +1815,7 @@ fn run_logs_can_be_kept_in_the_workspace_root_instead() {
 
 #[test]
 fn run_names_a_worktree_git_has_lost_track_of() {
-    let tmp = TempDir::new().unwrap();
+    let tmp = tempdir();
     let (root, bin) = task_workspace(tmp.path(), "");
     // What moving the workspace does to a worktree: its `.git` file points
     // at an administrative directory that is no longer there.

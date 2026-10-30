@@ -176,8 +176,9 @@ fetch "$base/$asset.sha256" "$tmp/$asset.sha256" ||
 
 expected=$(cut -d ' ' -f 1 <"$tmp/$asset.sha256")
 actual=$(sha256 "$tmp/$asset")
-[ -n "$expected" ] && [ "$expected" = "$actual" ] ||
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
 	die "checksum mismatch for $asset: expected $expected, got $actual"
+fi
 
 mkdir "$tmp/unpacked"
 tar -xzf "$tmp/$asset" -C "$tmp/unpacked"
