@@ -14,39 +14,123 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  release:
-    name: Build and publish
-    runs-on: ubuntu-24.04
+  # Each target is built and tested on a runner of its own architecture. The
+  # musl builds are static, so they run on any Linux; the gnu builds need the
+  # runner's glibc (2.39) or newer, which install.sh checks before installing one.
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { os: macos-14, target: aarch64-apple-darwin }
+          # Built on Apple Silicon; its tests run under Rosetta.
+          - { os: macos-14, target: x86_64-apple-darwin }
     steps:
+      # A manual run checks out the tag it releases, not the branch it was started from.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Install the stable toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
           rustup default stable
 
-      - run: cargo test --locked
+      - run: cargo test --locked --target ${{ matrix.target }}
 
-      - run: cargo build --release --locked
+      - run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package
-        id: package
         run: |
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
-          name="ws-${tag}-x86_64-unknown-linux-gnu.tar.gz"
-          tar -czf "$name" -C target/release ws
-          sha256sum "$name" > SHA256SUMS
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "asset=$name" >> "$GITHUB_OUTPUT"
+          name="ws-${TAG}-${{ matrix.target }}.tar.gz"
+          mkdir dist
+          tar -czf "dist/$name" -C target/${{ matrix.target }}/release ws
+          (cd dist && shasum -a 256 "$name" > "$name.sha256")
+          cat "dist/$name.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ws-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Only once every target has built, so a release never goes out half-filled.
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.package.outputs.tag }}" \
-            --title "${{ steps.package.outputs.tag }}" \
+          ls -l dist
+          gh release create "$TAG" \
+            --title "$TAG" \
             --generate-notes \
-            "${{ steps.package.outputs.asset }}" \
-            SHA256SUMS
+            dist/* \
+            install.sh
+
+  # Installs the published release the way users do, on distributions old and new.
+  smoke:
+    name: Install on ${{ matrix.name }}
+    needs: publish
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian 11
+            os: ubuntu-24.04
+            container: debian:11
+            prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+          - name: alpine
+            os: ubuntu-24.04
+            container: alpine:3
+            # No curl: exercises the busybox wget path.
+            prepare: 'true'
+          - name: fedora
+            os: ubuntu-24.04
+            container: fedora:latest
+            prepare: dnf install -y tar
+          - name: ubuntu 24.04 (gnu)
+            os: ubuntu-24.04
+            args: --libc gnu
+            prepare: 'true'
+          - name: macos
+            os: macos-14
+            prepare: 'true'
+    steps:
+      - run: ${{ matrix.prepare }}
+
+      - name: Install
+        run: |
+          url="https://github.com/${{ github.repository }}/releases/download/$TAG/install.sh"
+          if command -v curl >/dev/null; then
+            curl -fsSL "$url" | sh -s -- --version "$TAG" ${{ matrix.args }}
+          else
+            wget -qO- "$url" | sh -s -- --version "$TAG" ${{ matrix.args }}
+          fi
+
+      - name: Check the installed version
+        run: |
+          "$HOME/.local/bin/ws" --version
+          test "$("$HOME/.local/bin/ws" --version)" = "ws ${TAG#v}"

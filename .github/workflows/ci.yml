@@ -47,3 +47,37 @@ jobs:
         run: |
           ./target/release/ws --version
           ./target/release/ws --help > /dev/null
+
+  # Releases ship a macOS build, so the tests have to pass there too.
+  test-macos:
+    name: test (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version && cargo --version
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - run: cargo test --locked
+
+  install-script:
+    name: shellcheck install.sh
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # Plain POSIX sh, so it also runs under dash and busybox.
+      - run: shellcheck -s sh install.sh

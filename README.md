@@ -13,7 +13,64 @@ ws fetch
 ws switch feature/JIRA-123
 ```
 
-## Install on NixOS
+## Install
+
+On any Linux distribution or macOS, the install script downloads a prebuilt
+binary from the latest [release](https://github.com/anton-fomin/ws/releases):
+
+```
+curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh
+```
+
+It puts `ws` in `~/.local/bin`, without sudo, and says so if that directory is
+not on `PATH`. It touches no rc files. Options go after `sh -s --`:
+
+```
+curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh -s -- --version v0.7.0
+```
+
+| | |
+|---|---|
+| `--version <tag>` | a specific release instead of the latest |
+| `--bin-dir <dir>` | install somewhere else, e.g. `/usr/local/bin`; also `WS_INSTALL_DIR`. Uses sudo only when the directory is not writable |
+| `--libc musl\|gnu` | Linux only. The default is the static musl build, which runs on every distribution; `gnu` is the glibc build and needs glibc 2.39 or newer |
+
+The script picks the build for the machine — `x86_64` or `aarch64` Linux,
+Apple Silicon or Intel macOS — checks it against the release's `.sha256` file
+and refuses a mismatch, and tries the new binary before it replaces the old
+one. It needs `curl` or `wget`, `tar`, and `sha256sum` or `shasum`. `git` has
+to be installed for `ws` to be any use; see the
+[runtime dependencies](#runtime-dependencies) for the rest.
+
+**Upgrade** by running the same line again. **Uninstall** with
+`rm ~/.local/bin/ws`.
+
+**To read the script first**, download it rather than piping it — every
+release also carries the `install.sh` it was published with:
+
+```
+curl -fsSLO https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh
+less install.sh
+sh install.sh
+```
+
+**By hand**, download `ws-<tag>-<target>.tar.gz` and its `.sha256` from the
+release page, then:
+
+```
+sha256sum -c ws-v0.7.0-x86_64-unknown-linux-musl.tar.gz.sha256   # shasum -a 256 -c on macOS
+tar -xzf ws-v0.7.0-x86_64-unknown-linux-musl.tar.gz
+install -m 755 ws ~/.local/bin/ws
+```
+
+Releases before 0.7.0 have only an `x86_64-unknown-linux-gnu` build and no
+`.sha256` files, so the script cannot install them.
+
+Then add the [shell wrapper](#commands) (`eval "$(ws shell-init zsh)"` in your
+rc file, so `ws switch` also changes directory) and
+[completion](#shell-completion).
+
+### On NixOS
 
 The repository ships a flake, so `ws` installs straight from it. Flakes must be
 enabled: `nix.settings.experimental-features = [ "nix-command" "flakes" ];`
@@ -116,8 +173,11 @@ The shell is only as wide as the project, though: outside it `ws` is gone, and
 it cannot be what finds the *other* workspaces for `ws pick --global`. Install
 it per user too if you want it everywhere.
 
-**Runtime dependencies.** `ws` shells out rather than linking libraries, so the
-closure is just glibc — the tools it drives have to be on `PATH`:
+### Runtime dependencies
+
+`ws` shells out rather than linking libraries — the Nix closure is just glibc,
+and the musl build links nothing at all — so the tools it drives have to be on
+`PATH`:
 
 | | |
 |---|---|
