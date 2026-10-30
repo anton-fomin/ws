@@ -637,35 +637,40 @@ fn init_writes_a_parseable_config() {
 }
 
 #[test]
-fn init_suggests_the_agent_skill_until_it_is_installed() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path().join("work");
-    let home = tmp.path().join("home");
-    fs::create_dir_all(&root).unwrap();
-    fs::create_dir_all(&home).unwrap();
+fn init_suggests_the_agent_skill_until_an_agent_has_it() {
+    let skill =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/ws/SKILL.md"))
+            .unwrap();
+    // Claude Code, OpenCode, and the shared Agent Skills directory.
+    for installed in [".claude", ".config/opencode", ".agents"] {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("work");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&home).unwrap();
 
-    let init = |args: &[&str]| {
-        let out = ws(&root)
-            .env("HOME", &home)
-            .env_remove("CLAUDE_CONFIG_DIR")
-            .args(args)
-            .assert()
-            .success();
-        String::from_utf8(out.get_output().stderr.clone()).unwrap()
-    };
-    let stderr = init(&["init"]);
-    assert!(stderr.contains("ws skill >"), "{stderr}");
+        let init = |args: &[&str]| {
+            let out = ws(&root)
+                .env("HOME", &home)
+                .env_remove("CLAUDE_CONFIG_DIR")
+                .env_remove("XDG_CONFIG_HOME")
+                .args(args)
+                .assert()
+                .success();
+            String::from_utf8(out.get_output().stderr.clone()).unwrap()
+        };
+        let stderr = init(&["init"]);
+        assert!(
+            stderr.contains("github.com/anton-fomin/ws#coding-agents"),
+            "{stderr}"
+        );
 
-    // `ws skill` prints what the hint says to save, frontmatter first.
-    let skill = ws(&root).arg("skill").assert().success();
-    let skill = String::from_utf8(skill.get_output().stdout.clone()).unwrap();
-    assert!(skill.starts_with("---\nname: ws\n"), "{skill:.40}");
-
-    let installed = home.join(".claude/skills/ws");
-    fs::create_dir_all(&installed).unwrap();
-    fs::write(installed.join("SKILL.md"), &skill).unwrap();
-    let stderr = init(&["init", "--force"]);
-    assert!(!stderr.contains("ws skill"), "{stderr}");
+        let dir = home.join(installed).join("skills/ws");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), &skill).unwrap();
+        let stderr = init(&["init", "--force"]);
+        assert!(!stderr.contains("coding-agents"), "{installed}: {stderr}");
+    }
 }
 
 #[test]

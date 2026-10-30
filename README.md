@@ -189,7 +189,6 @@ cannot drift. `.ws/state.yaml` only records which `setup` commands have run.
 | `ws status` | where am I |
 | `ws shell-init <shell>` | shell wrapper so `ws switch` also `cd`s |
 | `ws completions <shell>` | completion script for bash, zsh or fish |
-| `ws skill` | the skill that teaches a coding agent to use `ws` |
 
 Global flags: `--dry-run` prints the git/tmux/herdr commands instead of running
 the mutating ones, `--mux <backend>` overrides the multiplexer, `-v` echoes
@@ -757,17 +756,31 @@ override those at runtime.
 
 ## Coding agents
 
-`ws skill` prints a skill that teaches an agent working inside a workspace how
-to find its way around: `ws status` to orient, `ws switch --cd` instead of
+[`skills/ws/SKILL.md`](skills/ws/SKILL.md) is a skill that teaches an agent
+working inside a workspace how to find its way around: `ws status` to orient,
+each repository's own `AGENTS.md` or `CLAUDE.md`, `ws switch --cd` instead of
 `git switch`, `ws run` for tasks, and which local files are shared symlinks.
-It is built into the binary from [`skills/ws/SKILL.md`](skills/ws/SKILL.md).
-`ws init` suggests installing it while Claude Code has no copy:
+`ws init` points here until an agent has it.
+
+Install it once per user with the [`skills`](https://skills.sh) CLI, naming
+the agents you use:
 
 ```
-mkdir -p ~/.claude/skills/ws && ws skill > ~/.claude/skills/ws/SKILL.md
+npx skills add anton-fomin/ws -g -a claude-code opencode
 ```
 
-Run it again after upgrading `ws` to pick up a newer skill.
+That puts the skill in `~/.agents/skills/ws`, which OpenCode reads, and links
+it into `~/.claude/skills/ws` for Claude Code. `-a` takes any agent the CLI
+knows (`codex`, `cursor`, `gemini-cli`, …). It installs from `main`;
+`npx skills update -g` fetches the current version.
+
+**Without Node**, copy the `skills/ws` directory of a checkout into the
+agent's skill directory, or symlink it so that `git pull` keeps it current:
+
+| agent | skill directory |
+|---|---|
+| Claude Code | `~/.claude/skills/ws` (`$CLAUDE_CONFIG_DIR/skills/ws` when that is set) |
+| OpenCode | `~/.config/opencode/skills/ws`; it also reads `~/.claude/skills` and `~/.agents/skills` |
 
 ## Development
 

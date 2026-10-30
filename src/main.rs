@@ -109,10 +109,6 @@ fn run() -> Result<()> {
             cli::completions(shell, &mut std::io::stdout());
             Ok(())
         }
-        Command::Skill => {
-            print!("{SKILL}");
-            Ok(())
-        }
         Command::Complete { what, word } => {
             cmd_complete(&runner, &cwd, what, word.as_deref().unwrap_or_default())
         }
@@ -449,27 +445,26 @@ fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// The agent skill, embedded so that `ws skill` works wherever the binary does.
-const SKILL: &str = include_str!("../skills/ws/SKILL.md");
+/// Where the README explains installing the agent skill.
+const SKILL_DOCS: &str = "https://github.com/anton-fomin/ws#coding-agents";
 
-/// Point at `ws skill` while Claude Code has no copy of it. Only a hint:
-/// `~/.claude` is the user's, not something `ws` writes into on its own.
+/// Point at the agent skill while no agent has a copy of it. Only a hint:
+/// the agents' directories are the user's, not something `ws` writes into.
 fn suggest_skill() {
-    let base = match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) if !dir.is_empty() => std::path::PathBuf::from(dir),
-        _ => match std::env::var_os("HOME") {
-            Some(home) => Path::new(&home).join(".claude"),
-            None => return,
-        },
-    };
-    let dir = base.join("skills").join("ws");
-    if dir.join("SKILL.md").exists() {
+    let env_dir = |name: &str| std::env::var_os(name).filter(|dir| !dir.is_empty());
+    let Some(home) = env_dir("HOME").map(std::path::PathBuf::from) else {
         return;
+    };
+    let claude = env_dir("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), Into::into);
+    let config = env_dir("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), Into::into);
+    let installed = [claude, config.join("opencode"), home.join(".agents")]
+        .iter()
+        .any(|base| base.join("skills/ws/SKILL.md").exists());
+    if !installed {
+        eprintln!(
+            "coding agents can learn ws from its skill:\n  npx skills add anton-fomin/ws -g -a claude-code opencode\n  (other agents and installing without Node: {SKILL_DOCS})"
+        );
     }
-    eprintln!(
-        "coding agents can learn ws from its skill; for Claude Code:\n  mkdir -p '{0}' && ws skill > '{0}/SKILL.md'",
-        dir.display()
-    );
 }
 
 /// Shared by `ws switch` and a branch chosen in the picker.
