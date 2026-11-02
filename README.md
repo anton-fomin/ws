@@ -39,8 +39,8 @@ The script picks the build for the machine — `x86_64` or `aarch64` Linux,
 Apple Silicon or Intel macOS — checks it against the release's `.sha256` file
 and refuses a mismatch, and tries the new binary before it replaces the old
 one. It needs `curl` or `wget`, `tar`, and `sha256sum` or `shasum`. `git` has
-to be installed for `ws` to be any use; see the
-[runtime dependencies](#runtime-dependencies) for the rest.
+to be installed for `ws` to be any use; everything else it drives is an
+optional [integration](#integrations).
 
 **Upgrade** by running the same line again. **Uninstall** with
 `rm ~/.local/bin/ws`.
@@ -112,7 +112,7 @@ Older Nix spells that `nix profile install`. Afterwards `nix profile upgrade ws`
           environment.systemPackages = [
             ws.packages.${pkgs.system}.default
             pkgs.git                              # required at runtime
-            pkgs.tmux pkgs.fzf pkgs.zoxide        # optional, see below
+            pkgs.tmux pkgs.fzf pkgs.zoxide        # optional, see Integrations
           ];
         })
       ];
@@ -156,7 +156,7 @@ version for everyone working on the project:
         packages = [
           ws.packages.${system}.default
           pkgs.git                              # required at runtime
-          pkgs.tmux pkgs.fzf pkgs.zoxide        # optional, see below
+          pkgs.tmux pkgs.fzf pkgs.zoxide        # optional, see Integrations
         ];
       };
     };
@@ -172,21 +172,6 @@ systems wrap the outputs in `nixpkgs.lib.genAttrs` — this repository's own
 The shell is only as wide as the project, though: outside it `ws` is gone, and
 it cannot be what finds the *other* workspaces for `ws pick --global`. Install
 it per user too if you want it everywhere.
-
-### Runtime dependencies
-
-`ws` shells out rather than linking libraries — the Nix closure is just glibc,
-and the musl build links nothing at all — so the tools it drives have to be on
-`PATH`:
-
-| | |
-|---|---|
-| `git` | required |
-| `tmux` or `herdr` | whichever multiplexer you use; without either, `ws` prints the branch directory |
-| `fzf` | only for `ws pick` |
-| `zoxide` | only for the directory registration and `ws pick --global` |
-| `yarn`, `pnpm`, `npm`, `uv` | only for the [package manager](#package-managers) installs, and package.json [tasks](#tasks) |
-| `just`, `task` | only for [`ws run`](#tasks) |
 
 ## Layout
 
@@ -462,7 +447,27 @@ and direnv alike.
 And for the shell you are in, by hand: `eval "$(ws completions zsh)"`, once
 `compinit` has run.
 
-## Multiplexers
+## Integrations
+
+`git` is the only thing `ws` needs. Everything else it drives is an
+integration: each one comes into play when its program is on `PATH` and is
+left out otherwise, and none of them can fail a switch — a problem is a
+warning. `ws` shells out rather than linking libraries — the Nix closure is
+just glibc, and the musl build links nothing at all — so these are the
+programs it looks for:
+
+| | |
+|---|---|
+| `tmux` or `herdr` | the session over the branch directory, see [Multiplexers](#multiplexers); without either, `ws` prints the branch directory |
+| `fzf` | the picker of `ws pick`, see [fzf and zoxide](#fzf-and-zoxide) |
+| `zoxide` | directory registration and `ws pick --global` |
+| `yarn`, `pnpm`, `npm`, `uv` | [package manager](#package-managers) installs, and package.json [tasks](#tasks) |
+| `just`, `task` | the task sources of [`ws run`](#tasks) |
+
+[Local files](#local-files) need no program, only a directory. `ws status`
+lists which integrations are active on this machine.
+
+### Multiplexers
 
 * **tmux** — one window per repository named after it, plus a shared window for
   the branch directory when there are several repos. Inside tmux the current
@@ -478,7 +483,7 @@ And for the shell you are in, by hand: `eval "$(ws completions zsh)"`, once
 `backend = "auto"` picks whichever one `ws` is running inside, then whichever is
 installed.
 
-## fzf and zoxide
+### fzf and zoxide
 
 `ws pick` offers the branches already checked out, the `origin/*` branches that
 are not, and — with `--global`, or outside a workspace — other workspace roots
@@ -489,7 +494,7 @@ Every switch registers the branch directory and its worktrees with zoxide, so
 `z feature-JIRA` jumps straight there; `ws rm` removes them again. Set
 `integrations.zoxide.enabled: false` to opt out.
 
-## Local files
+### Local files
 
 Untracked files you want in every worktree — a `.env` with credentials,
 editor settings, a personal `Makefile.local`, an `.npmrc` with a token — live
@@ -534,7 +539,7 @@ They are not added to any ignore file: keep them in the repository's
 `.gitignore`, or your global one. A branch whose directory would be `local/`
 itself is refused.
 
-## Package managers
+### Package managers
 
 yarn, pnpm, npm and uv are integrations too. Each is on by default when its
 program is on `PATH` (`enabled: auto`), and then acts only on repositories that
@@ -599,7 +604,7 @@ integrations:
 
 `ws status` lists which integrations are active on this machine.
 
-## Tasks
+### Tasks
 
 `ws run` runs what the repositories declare they can run — the recipes of a
 `justfile`, the tasks of a `Taskfile.yml`, the `scripts` of `package.json` —
@@ -666,7 +671,7 @@ package manager — the `packageManager` field, then the lockfile, then npm —
 through the launcher configured under `integrations`, whether or not that
 integration installs.
 
-### Logs
+#### Logs
 
 With logging on, everything `ws run` prints also goes to a file per task,
 without the colours:
