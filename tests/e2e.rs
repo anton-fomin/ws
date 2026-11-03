@@ -644,9 +644,10 @@ fn init_writes_a_parseable_config() {
 
 #[test]
 fn init_suggests_the_agent_skill_until_an_agent_has_it() {
-    let skill =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/ws/SKILL.md"))
-            .unwrap();
+    let skill = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/ws-workspace/SKILL.md"),
+    )
+    .unwrap();
     // Claude Code, OpenCode, and the shared Agent Skills directory.
     for installed in [".claude", ".config/opencode", ".agents"] {
         let tmp = tempdir();
@@ -671,7 +672,7 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
             "{stderr}"
         );
 
-        let dir = home.join(installed).join("skills/ws");
+        let dir = home.join(installed).join("skills/ws-workspace");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), &skill).unwrap();
         let stderr = init(&["init", "--force"]);

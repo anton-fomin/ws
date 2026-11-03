@@ -1,5 +1,5 @@
 ---
-name: ws
+name: ws-workspace
 description: Working inside a ws workspace — a multi-repo git worktree layout with a `ws.yaml` at its root, a `.ws.yaml` branch marker, or worktrees whose `.git` points into `.bare/`. Use when changing branches, running tests or dev servers, reaching a sibling repository, or touching `.env` and other local files there.
 ---
 

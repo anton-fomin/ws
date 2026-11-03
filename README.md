@@ -821,7 +821,7 @@ override those at runtime.
 
 ## Coding agents
 
-[`skills/ws/SKILL.md`](skills/ws/SKILL.md) is a skill that teaches an agent
+[`skills/ws-workspace/SKILL.md`](skills/ws-workspace/SKILL.md) is a skill that teaches an agent
 working inside a workspace how to find its way around: `ws status` to orient,
 each repository's own `AGENTS.md` or `CLAUDE.md`, `ws switch --cd` instead of
 `git switch`, `ws run` for tasks, and which local files are shared symlinks.
@@ -834,18 +834,18 @@ the agents you use:
 npx skills add anton-fomin/ws -g -a claude-code opencode
 ```
 
-That puts the skill in `~/.agents/skills/ws`, which OpenCode reads, and links
-it into `~/.claude/skills/ws` for Claude Code. `-a` takes any agent the CLI
+That puts the skill in `~/.agents/skills/ws-workspace`, which OpenCode reads, and links
+it into `~/.claude/skills/ws-workspace` for Claude Code. `-a` takes any agent the CLI
 knows (`codex`, `cursor`, `gemini-cli`, …). It installs from `main`;
 `npx skills update -g` fetches the current version.
 
-**Without Node**, copy the `skills/ws` directory of a checkout into the
+**Without Node**, copy the `skills/ws-workspace` directory of a checkout into the
 agent's skill directory, or symlink it so that `git pull` keeps it current:
 
 | agent | skill directory |
 |---|---|
-| Claude Code | `~/.claude/skills/ws` (`$CLAUDE_CONFIG_DIR/skills/ws` when that is set) |
-| OpenCode | `~/.config/opencode/skills/ws`; it also reads `~/.claude/skills` and `~/.agents/skills` |
+| Claude Code | `~/.claude/skills/ws-workspace` (`$CLAUDE_CONFIG_DIR/skills/ws-workspace` when that is set) |
+| OpenCode | `~/.config/opencode/skills/ws-workspace`; it also reads `~/.claude/skills` and `~/.agents/skills` |
 
 ## Development
 

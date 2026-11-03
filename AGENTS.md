@@ -77,7 +77,7 @@ version pin examples in `README.md`. Pushing a `v*` tag triggers
 `.github/workflows/release.yml`, which builds gnu and musl Linux and macOS
 targets with `.sha256` files that `install.sh` verifies.
 
-`skills/ws/SKILL.md` is the agent skill shipped for users of `ws`; keep it in
+`skills/ws-workspace/SKILL.md` is the agent skill shipped for users of `ws`; keep it in
 sync when commands change.
 
 ## Agent skills
