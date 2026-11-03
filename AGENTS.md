@@ -77,8 +77,11 @@ version pin examples in `README.md`. Pushing a `v*` tag triggers
 `.github/workflows/release.yml`, which builds gnu and musl Linux and macOS
 targets with `.sha256` files that `install.sh` verifies.
 
-`skills/ws-workspace/SKILL.md` is the agent skill shipped for users of `ws`; keep it in
-sync when commands change.
+`skills/ws/SKILL.md` (the user-invoked `/ws <task>` launcher) and
+`skills/ws-workspace/SKILL.md` (the in-workspace reference) are the agent
+skills shipped for users of `ws`; keep both in sync when commands, session
+naming or multiplexer behaviour change. Their bodies must not contain a `$`
+followed by a digit: Claude Code and OpenCode substitute it as an argument.
 
 ## Agent skills
 

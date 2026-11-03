@@ -821,31 +821,52 @@ override those at runtime.
 
 ## Coding agents
 
-[`skills/ws-workspace/SKILL.md`](skills/ws-workspace/SKILL.md) is a skill that teaches an agent
-working inside a workspace how to find its way around: `ws status` to orient,
-each repository's own `AGENTS.md` or `CLAUDE.md`, `ws switch --cd` instead of
-`git switch`, `ws run` for tasks, and which local files are shared symlinks.
-`ws init` points here until an agent has it.
+The repository ships two skills for Claude Code, OpenCode and pi:
 
-Install it once per user with the [`skills`](https://skills.sh) CLI, naming
-the agents you use:
+- [`skills/ws/SKILL.md`](skills/ws/SKILL.md), **`/ws <task>`**, launches a
+  task into its own workspace. Type it in an agent session anywhere inside a
+  workspace (in pi: `/skill:ws <task>`). The agent picks a branch name from
+  the repositories' conventions (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`,
+  then the pattern of the remote branches, then `<type>/<slug>`), branches
+  from the ref the task names or else from `origin/<default_branch>` after
+  `ws fetch`, and runs `ws switch`. It saves the task verbatim to
+  `<branch-dir>/.ws/task.md`, starts the same kind of agent in the session's
+  root pane with a pointer to that file, and leaves you in the new session.
+  It stops and asks when the branch already exists or the branch convention
+  needs a ticket ID the task lacks; without a multiplexer it prints the
+  directory and the command to run. Only you invoke it.
+- [`skills/ws-workspace/SKILL.md`](skills/ws-workspace/SKILL.md) teaches an
+  agent working inside a workspace how to find its way around: `ws status` to
+  orient, each repository's own `AGENTS.md` or `CLAUDE.md`, `ws switch --cd`
+  instead of `git switch`, `ws run` for tasks, and which local files are
+  shared symlinks. Agents load it on their own, and the agent `/ws` starts is
+  told to. `ws init` points here until an agent has it.
+
+`/ws` adds `.ws/task.md` to no ignore file. In a single-repo workspace the
+file sits inside the worktree, so ignore `.ws/` yourself if it should not
+show up as untracked.
+
+Install both once per user with the [`skills`](https://skills.sh) CLI,
+naming the agents you use:
 
 ```
 npx skills add anton-fomin/ws -g -a claude-code opencode
 ```
 
-That puts the skill in `~/.agents/skills/ws-workspace`, which OpenCode reads, and links
-it into `~/.claude/skills/ws-workspace` for Claude Code. `-a` takes any agent the CLI
-knows (`codex`, `cursor`, `gemini-cli`, …). It installs from `main`;
+That puts the skills in `~/.agents/skills/`, which OpenCode and pi read, and
+links them into `~/.claude/skills/` for Claude Code. `-a` takes any agent the
+CLI knows (`codex`, `cursor`, `gemini-cli`, …). It installs from `main`;
 `npx skills update -g` fetches the current version.
 
-**Without Node**, copy the `skills/ws-workspace` directory of a checkout into the
-agent's skill directory, or symlink it so that `git pull` keeps it current:
+**Without Node**, copy the `skills/ws` and `skills/ws-workspace` directories
+of a checkout into the agent's skill directory, or symlink them so that
+`git pull` keeps them current:
 
 | agent | skill directory |
 |---|---|
-| Claude Code | `~/.claude/skills/ws-workspace` (`$CLAUDE_CONFIG_DIR/skills/ws-workspace` when that is set) |
-| OpenCode | `~/.config/opencode/skills/ws-workspace`; it also reads `~/.claude/skills` and `~/.agents/skills` |
+| Claude Code | `~/.claude/skills/` (`$CLAUDE_CONFIG_DIR/skills/` when that is set) |
+| OpenCode | `~/.config/opencode/skills/`; it also reads `~/.claude/skills` and `~/.agents/skills` |
+| pi | `~/.pi/agent/skills/`; it also reads `~/.agents/skills` |
 
 ## Development
 
@@ -853,7 +874,7 @@ agent's skill directory, or symlink it so that `git pull` keeps it current:
 
 ```
 nix develop              # rustc, cargo, clippy, rustfmt, git, tmux, fzf, zoxide
-cargo test               # 108 unit + 42 end-to-end tests, no network
+cargo test               # 108 unit + 43 end-to-end tests, no network
 cargo clippy --all-targets -- -D warnings
 ```
 
