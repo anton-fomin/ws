@@ -263,6 +263,71 @@ fn dirty_worktrees_are_protected_from_rm() {
 }
 
 #[test]
+fn a_launcher_task_file_does_not_dirty_a_single_repo_worktree() {
+    let tmp = tempdir();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+    let root = single_repo_workspace(tmp.path(), &api);
+
+    ws(&root).args(["switch", "main"]).assert().success();
+    fs::create_dir_all(root.join("main/.ws")).unwrap();
+    fs::write(root.join("main/.ws/task.md"), "do the thing\n").unwrap();
+
+    let out = ws(&root).arg("list").output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains('*'), "{text}");
+
+    // Not dirty, so no --force; the task file goes with the worktree.
+    ws(&root).args(["rm", "main"]).assert().success();
+    assert!(!root.join("main").exists());
+}
+
+#[test]
+fn other_files_beside_the_task_file_still_dirty_the_worktree() {
+    let tmp = tempdir();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+    let root = single_repo_workspace(tmp.path(), &api);
+
+    ws(&root).args(["switch", "main"]).assert().success();
+    fs::create_dir_all(root.join("main/.ws")).unwrap();
+    fs::write(root.join("main/.ws/task.md"), "do the thing\n").unwrap();
+    fs::write(root.join("main/.ws/notes.md"), "mine\n").unwrap();
+
+    let out = ws(&root).args(["rm", "main"]).output().unwrap();
+    assert!(!out.status.success(), "rm should refuse a dirty worktree");
+    assert!(root.join("main/.ws/notes.md").exists());
+}
+
+#[test]
+fn rm_takes_the_task_file_out_of_a_multi_repo_branch_directory() {
+    let tmp = tempdir();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+    let web = origin_repo(&origins, "web");
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!(
+            "repos:\n  - name: api\n    url: \"{}\"\n  - name: web\n    url: \"{}\"\n",
+            api.display(),
+            web.display()
+        ),
+    );
+
+    ws(&root).args(["switch", "main"]).assert().success();
+    fs::create_dir_all(root.join("main/.ws")).unwrap();
+    fs::write(root.join("main/.ws/task.md"), "do the thing\n").unwrap();
+
+    ws(&root).args(["rm", "main"]).assert().success();
+    assert!(!root.join("main").exists());
+}
+
+#[test]
 fn zoxide_registers_and_forgets_the_paths() {
     let tmp = tempdir();
     let origins = tmp.path().join("origins");
@@ -648,8 +713,8 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/ws-workspace/SKILL.md"),
     )
     .unwrap();
-    // Claude Code, OpenCode, and the shared Agent Skills directory.
-    for installed in [".claude", ".config/opencode", ".agents"] {
+    // Claude Code, OpenCode, pi, and the shared Agent Skills directory.
+    for installed in [".claude", ".config/opencode", ".pi/agent", ".agents"] {
         let tmp = tempdir();
         let root = tmp.path().join("work");
         let home = tmp.path().join("home");
@@ -661,6 +726,7 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
                 .env("HOME", &home)
                 .env_remove("CLAUDE_CONFIG_DIR")
                 .env_remove("XDG_CONFIG_HOME")
+                .env_remove("PI_CODING_AGENT_DIR")
                 .args(args)
                 .assert()
                 .success();
