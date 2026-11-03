@@ -750,6 +750,13 @@ pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Res
     // untracked file and keep the directory from being removed.
     if !runner.dry_run {
         let _ = std::fs::remove_file(branch_dir.join(marker::BRANCH_FILE));
+        // So is the launcher's task file, and its directory once empty.
+        let task = branch_dir.join(marker::TASK_FILE);
+        if std::fs::remove_file(&task).is_ok() {
+            if let Some(dir) = task.parent() {
+                let _ = std::fs::remove_dir(dir);
+            }
+        }
         // The branch's logs go with it; they would keep the directory — and
         // with a single repository, the worktree — from being removed.
         if let Some(logs) = ws.logs_in_branch_dir() {

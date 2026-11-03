@@ -457,9 +457,10 @@ fn suggest_skill() {
     };
     let claude = env_dir("CLAUDE_CONFIG_DIR").map_or_else(|| home.join(".claude"), Into::into);
     let config = env_dir("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), Into::into);
-    let installed = [claude, config.join("opencode"), home.join(".agents")]
+    let pi = env_dir("PI_CODING_AGENT_DIR").map_or_else(|| home.join(".pi/agent"), Into::into);
+    let installed = [claude, config.join("opencode"), pi, home.join(".agents")]
         .iter()
-        .any(|base| base.join("skills/ws/SKILL.md").exists());
+        .any(|base| base.join("skills/ws-workspace/SKILL.md").exists());
     if !installed {
         eprintln!(
             "coding agents can learn ws from its skill:\n  npx skills add anton-fomin/ws -g -a claude-code opencode\n  (other agents and installing without Node: {SKILL_DOCS})"
