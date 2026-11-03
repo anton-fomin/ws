@@ -14,6 +14,11 @@ use std::path::{Path, PathBuf};
 
 pub const BRANCH_FILE: &str = ".ws.yaml";
 
+/// The task the `/ws` launcher skill hands to the agent it starts, relative
+/// to the branch directory. `ws` never writes it, but treats it like the
+/// marker: it does not make a worktree dirty, and `ws rm` takes it along.
+pub const TASK_FILE: &str = ".ws/task.md";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Marker {
     pub branch: String,

@@ -254,18 +254,42 @@ pub fn set_upstream(runner: &Runner, worktree: &Path, branch: &str) -> Result<()
 /// there, and it is not a reason to call the worktree dirty or to refuse to
 /// remove it.
 /// Whether a worktree has changes of its own — not counting what `ws` puts
-/// there itself: the branch marker, and `own`, the logs directory of a branch
-/// directory that is also the worktree.
+/// there itself: the branch marker, the launcher's task file, and `own`, the
+/// logs directory of a branch directory that is also the worktree.
 pub fn is_dirty(runner: &Runner, worktree: &Path, own: Option<&Path>) -> bool {
-    let marker = format!("?? {}", crate::marker::BRANCH_FILE);
+    use crate::marker::{BRANCH_FILE, TASK_FILE};
+    let marker = format!("?? {BRANCH_FILE}");
+    let task = format!("?? {TASK_FILE}");
     let own = own.map(|dir| format!("?? {}/", dir.to_string_lossy()));
+    // git folds a directory of only untracked files into one `dir/` line; the
+    // task file's directory is not a change while the task is all it holds.
+    let task_dir = Path::new(TASK_FILE)
+        .parent()
+        .filter(|dir| holds_only(&worktree.join(dir), Path::new(TASK_FILE)))
+        .map(|dir| format!("?? {}/", dir.to_string_lossy()));
     match runner.try_capture(&git(worktree).args(["status", "--porcelain"])) {
         Ok(Some(out)) => out.lines().any(|line| {
             let line = line.trim();
-            !line.is_empty() && line != marker && Some(line) != own.as_deref()
+            !line.is_empty()
+                && line != marker
+                && line != task
+                && Some(line) != own.as_deref()
+                && Some(line) != task_dir.as_deref()
         }),
         _ => false,
     }
+}
+
+/// Whether `dir` has exactly one entry, named like `file`.
+fn holds_only(dir: &Path, file: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    let names: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    names.len() == 1 && Some(names[0].as_os_str()) == file.file_name()
 }
 
 pub fn current_branch(runner: &Runner, worktree: &Path) -> Option<String> {
