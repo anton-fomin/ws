@@ -17,7 +17,7 @@ You are the **launcher**: classify the task, create its branch directory, hand t
 
 ## 1. Workspace
 
-Run `ws status`. If it fails, stop: "`/ws` only works inside a ws workspace (a directory with `ws.yaml` above it)." Note `root`, and read the files its `config` lines list, in order; a later file overrides an earlier one key by key. From them take the repos (a repo's name is its `name`, else the last segment of its `url` without `.git`), `default_branch` (default `main`), `bare_dir` (default `.bare`) and `mux.backend` (default `auto`).
+Run `ws status`. If it fails, stop: "`/ws` only works inside a ws workspace (a directory with `ws.yaml` above it)." Note `root`, and read the files its `config` lines list, in order; a later file overrides an earlier one key by key. From them take the repos (a repo's name is its `name`, else the last segment of its `url` without `.git`), `default_branch` (default `main`), `bare_dir` (default `.bare`), `mux.backend` (default `auto`), `mux.tmux.command`, `mux.herdr.command` and `mux.herdr.session`.
 
 ## 2. Fetch
 
@@ -86,10 +86,15 @@ Any other exit status is an error, not an answer: stop and show it.
 
 ## 7. Create the branch directory
 
-Inside a tmux client (`$TMUX` is set) with `mux.backend` `tmux` or `auto`, keep ws from switching the client yet; the switch comes last, in step 10. Use `mux.tmux.command` in place of `tmux` if the config sets one:
+Talk to the multiplexer exactly as ws does. From here on every tmux or herdr call uses these, never a bare `tmux` or `herdr`:
+
+- `<tmux>`: `$WS_TMUX_CMD` when set and non-empty; else `mux.tmux.command` when the config sets one other than `[tmux]` (items joined by spaces, single-quoting any with spaces); else, inside a tmux client (`$TMUX` is set), `tmux -S '<socket>'` with `<socket>` the part of `$TMUX` before the first comma; else `tmux`.
+- `<herdr>`: `$WS_HERDR_CMD` when set and non-empty, else `mux.herdr.command`, else `herdr`. When `mux.herdr.session` is set and you are outside a herdr pane (`HERDR_ENV` is not `1` and `HERDR_PANE_ID` is unset), append `--session '<mux.herdr.session>'`: it goes before the subcommand.
+
+Inside a tmux client with `mux.backend` `tmux` or `auto`, keep ws from switching the client yet; the switch comes last, in step 10:
 
 ```sh
-env -u TMUX WS_TMUX_CMD="tmux -S '${TMUX%%,*}'" ws switch '<branch>' --from '<base>' --mux tmux </dev/null
+env -u TMUX WS_TMUX_CMD="<tmux>" ws switch '<branch>' --from '<base>' --mux tmux </dev/null
 ```
 
 Otherwise:
@@ -98,13 +103,19 @@ Otherwise:
 ws switch '<branch>' --from '<base>'
 ```
 
-No `--cd`: ws creates the worktrees, runs setup and opens the herdr or tmux session (herdr focuses it right away). A non-zero exit after `created worktrees` can still have opened the session (outside a tmux client ws ends with `open terminal failed: not a terminal`; some tmux layouts fail on a later option): carry on when `ws path '<branch>'` prints the branch directory, otherwise stop and show the error.
+No `--cd`: ws creates the worktrees, runs setup and opens the herdr or tmux session (herdr focuses it right away). Keep its output.
 
-`<branch-dir>` is the absolute path `ws path '<branch>'` prints (the worktree itself in a single-repo workspace). Run `cd '<branch-dir>' && ws status`; its `session` line is the session name. herdr uses it as the workspace label as is. For tmux replace each `.`, `:`, `\` and control character with `-`; an empty name becomes `ws`.
+`<branch-dir>` is the absolute path `ws path '<branch>'` prints (the worktree itself in a single-repo workspace). `ws path` only computes paths, so it proves nothing about the switch. Run `cd '<branch-dir>' && ws status`; its `session` line is the session name. herdr uses it as the workspace label as is. For tmux, `<tmux-session>` is that name with each `.`, `:`, `\` and control character replaced by `-`; an empty name becomes `ws`.
+
+The switch counts as done when all of these hold; otherwise stop and show ws's output:
+
+- **Exit status**: 0, or non-zero with a `created worktrees:` line in the output (ws prints it only once every worktree and its setup succeeded) and an error from opening the session: `open terminal failed: not a terminal`, or a tmux option error after the session was created.
+- **Worktrees**: for every repo, `ws path '<branch>' '<repo>'` is an existing directory.
+- **Session**: `<tmux> has-session -t '=<tmux-session>'` succeeds, or `<herdr> workspace list` has a workspace labelled `<session>`. With a non-zero exit one of them must. With exit 0 and neither, ws ran without a multiplexer (`mux: none`).
 
 ## 8. Task file
 
-Write the task verbatim to `<branch-dir>/.ws/task.md`: every character as the user gave it, no summary, no added heading. Use your file-writing tool, or a quoted heredoc with a delimiter that does not occur in the task:
+Write the task verbatim to `<branch-dir>/.ws/task.md` with your file-writing tool: every character as the user gave it, no summary, no added heading, no trailing newline the task does not have. Only an agent without a file-writing tool uses a quoted heredoc, with a delimiter that does not occur in the task; it ends the file with one newline:
 
 ```sh
 mkdir -p '<branch-dir>/.ws'
@@ -119,30 +130,30 @@ Leave `.gitignore` and `.git/info/exclude` as they are. ws does not count this f
 
 Start the agent in the session's first pane: the first pane of the first tab or window. The pointer names the task file by absolute path, so the pane's directory does not matter.
 
-**herdr** (`herdr workspace list` has a workspace labelled `<session>`):
+**herdr** (the session check found the herdr workspace):
 
 ```sh
-W=$(herdr workspace list | jq -r --arg l '<session>' '.result.workspaces[] | select(.label == $l) | .workspace_id')
-T=$(herdr tab list --workspace "$W" | jq -r '.result.tabs | min_by(.number) | .tab_id')
-P=$(herdr pane list --workspace "$W" | jq -r --arg t "$T" --arg d '<branch-dir>' '[.result.panes[] | select(.tab_id == $t)] | (map(select(.cwd == $d)) + .)[0].pane_id')
-herdr pane run "$P" "<launch command>"
+W=$(<herdr> workspace list | jq -r --arg l '<session>' '.result.workspaces[] | select(.label == $l) | .workspace_id')
+T=$(<herdr> tab list --workspace "$W" | jq -r '.result.tabs | min_by(.number) | .tab_id')
+P=$(<herdr> pane list --workspace "$W" | jq -r --arg t "$T" --arg d '<branch-dir>' '[.result.panes[] | select(.tab_id == $t)] | (map(select(.cwd == $d)) + .)[0].pane_id')
+<herdr> pane run "$P" "<launch command>"
 ```
 
 That picks the tab's pane in the branch directory, else its first pane. Without `jq`, read the JSON yourself.
 
-**tmux** (`tmux has-session -t '=<session>'` succeeds):
+**tmux** (the session check found the tmux session):
 
 ```sh
-tmux send-keys -t '=<session>:^.{top-left}' -l -- "<launch command>"
-tmux send-keys -t '=<session>:^.{top-left}' Enter
+<tmux> send-keys -t '=<tmux-session>:^.{top-left}' -l -- "<launch command>"
+<tmux> send-keys -t '=<tmux-session>:^.{top-left}' Enter
 ```
 
 **No session** (`mux: none`): launch nothing. Print the branch directory and the command to run there, `cd '<branch-dir>' && <launch command>`, and skip step 10.
 
 ## 10. Switch
 
-- herdr: `herdr workspace focus "$W"` (ws already focused it; this does it again).
-- tmux inside a client: `tmux switch-client -t '=<session>'`.
-- tmux outside a client: tell the user to run `tmux attach -t '=<session>'`.
+- herdr: `<herdr> workspace focus "$W"` (ws already focused it; this does it again).
+- tmux inside a client: `<tmux> switch-client -t '=<tmux-session>'`.
+- tmux outside a client: tell the user to run `<tmux> attach -t '=<tmux-session>'`.
 
 Finish with one short report: branch, base, branch directory, agent started. A new folder may first show the agent's trust prompt in the new session; tell the user to confirm it there.
