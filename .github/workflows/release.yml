@@ -98,9 +98,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: debian 11
+          - name: debian 12
             os: ubuntu-24.04
-            container: debian:11
+            container: debian:12
             prepare: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
           - name: alpine
             os: ubuntu-24.04
