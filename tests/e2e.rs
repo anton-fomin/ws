@@ -734,7 +734,7 @@ fn init_suggests_the_agent_skill_until_an_agent_has_it() {
         };
         let stderr = init(&["init"]);
         assert!(
-            stderr.contains("github.com/anton-fomin/ws#coding-agents"),
+            stderr.contains("ws.fomin.space/docs/coding-agents/"),
             "{stderr}"
         );
 

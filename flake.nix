@@ -17,6 +17,13 @@
           # The end-to-end tests build fixture repositories with git.
           nativeCheckInputs = [ pkgs.git ];
 
+          meta = {
+            description = "Multi-repo git worktree workspaces";
+            homepage = "https://ws.fomin.space";
+            license = with pkgs.lib.licenses; [ mit asl20 ];
+            mainProgram = "ws";
+          };
+
           nativeBuildInputs = [ pkgs.installShellFiles ];
           # `ws completions` prints the script, so the binary itself is the
           # source of truth — skipped when it cannot run on the build machine.
