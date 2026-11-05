@@ -893,3 +893,11 @@ change without installing anything.
 
 The end-to-end tests build local fixture repositories and stub out fzf,
 zoxide, the package managers and `just` with small scripts, so nothing external is required.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option. Unless you explicitly state
+otherwise, any contribution intentionally submitted for inclusion in `ws` by
+you, as defined in the Apache-2.0 license, shall be dual licensed as above,
+without any additional terms or conditions.

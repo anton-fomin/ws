@@ -3,6 +3,9 @@ name = "ws"
 version = "0.7.0"
 edition = "2021"
 description = "Multi-repo git worktree workspaces with tmux/herdr, fzf and zoxide integration"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/anton-fomin/ws"
+homepage = "https://ws.fomin.space"
 
 [[bin]]
 name = "ws"
