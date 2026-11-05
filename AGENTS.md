@@ -4,9 +4,13 @@ Guidance for coding agents working in this repository.
 
 `ws` is a Rust CLI for multi-repo git worktree workspaces: one bare clone per
 repository, one branch directory per branch holding a worktree of each repo,
-per-repo setup, and a tmux/herdr session laid over the result. The README is
-the user-facing spec and is kept detailed; behaviour changes usually need a
-README change too.
+per-repo setup, and a tmux/herdr session laid over the result. The user
+documentation in `docs/*.md` and `docs/integrations/*.md` is the user-facing
+spec and is kept detailed; behaviour changes usually need a docs change too.
+https://ws.fomin.space is built from those pages at each release tag (by
+`anton-fomin/ws-site`, whose page list must name every page — see
+`CONTRIBUTING.md`). The README is only a short overview linking to them;
+`docs/agents/` is for agents and is not published.
 
 ## Commands
 
@@ -73,9 +77,11 @@ never leak in — use it (or `ws_with_global`) for new e2e tests.
 ## Releases
 
 The version must agree in `Cargo.toml`, `Cargo.lock` and `flake.nix`, plus the
-version pin examples in `README.md`. Pushing a `v*` tag triggers
+version pin examples in `docs/getting-started.md`. Pushing a `v*` tag triggers
 `.github/workflows/release.yml`, which builds gnu and musl Linux and macOS
-targets with `.sha256` files that `install.sh` verifies.
+targets with `.sha256` files that `install.sh` verifies. Once
+published, the release asks `ws-site` to rebuild through a
+`repository_dispatch`, authenticated by the `WS_SITE_TOKEN` secret.
 
 `skills/ws/SKILL.md` (the user-invoked `/ws <task>` launcher) and
 `skills/ws-workspace/SKILL.md` (the in-workspace reference) are the agent

@@ -445,8 +445,8 @@ fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Where the README explains installing the agent skill.
-const SKILL_DOCS: &str = "https://github.com/anton-fomin/ws#coding-agents";
+/// Where the docs explain installing the agent skills.
+const SKILL_DOCS: &str = "https://ws.fomin.space/docs/coding-agents/";
 
 /// Point at the agent skill while no agent has a copy of it. Only a hint:
 /// the agents' directories are the user's, not something `ws` writes into.

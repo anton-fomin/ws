@@ -134,3 +134,22 @@ jobs:
         run: |
           "$HOME/.local/bin/ws" --version
           test "$("$HOME/.local/bin/ws" --version)" = "ws ${TAG#v}"
+
+  # Rebuilds https://ws.fomin.space with this release's docs/, once the release
+  # has installed cleanly everywhere. WS_SITE_TOKEN is a fine-grained token with
+  # contents read/write on anton-fomin/ws-site; without it the step is skipped.
+  site:
+    name: Update the website
+    needs: smoke
+    runs-on: ubuntu-24.04
+    env:
+      WS_SITE_TOKEN: ${{ secrets.WS_SITE_TOKEN }}
+    steps:
+      - name: Dispatch to ws-site
+        if: env.WS_SITE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ secrets.WS_SITE_TOKEN }}
+        run: |
+          gh api repos/anton-fomin/ws-site/dispatches \
+            -f event_type=ws-release \
+            -f "client_payload[tag]=$TAG"

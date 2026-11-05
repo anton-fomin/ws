@@ -239,6 +239,6 @@ cat <<'EOF'
 
 Next steps:
   eval "$(ws shell-init zsh)"     in ~/.zshrc (or bash), so `ws switch` also cds
-  ws completions zsh > ...        shell completion, see the README
-  tmux or herdr, fzf, zoxide      optional, see https://github.com/anton-fomin/ws#install
+  ws completions zsh > ...        shell completion, see https://ws.fomin.space/docs/shell-completion/
+  tmux or herdr, fzf, zoxide      optional, see https://ws.fomin.space/docs/integrations/
 EOF
