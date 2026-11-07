@@ -1,6 +1,7 @@
 //! `ws.yaml` parsing, defaults and workspace discovery.
 
 use anyhow::{bail, Context, Result};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_yaml_ng::{Mapping, Value};
 use std::collections::HashSet;
@@ -9,50 +10,64 @@ use std::path::{Path, PathBuf};
 pub const CONFIG_FILE: &str = "ws.yaml";
 pub const STATE_DIR: &str = ".ws";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    /// Workspace name, used in session names. Defaults to the directory `ws.yaml` is in.
     #[serde(default)]
     pub name: Option<String>,
+    /// Branch checked out by `ws fetch`.
     #[serde(default = "def_default_branch")]
     pub default_branch: String,
     /// What new branches fork from. `None` means the bare clone's own HEAD.
     #[serde(default)]
     pub base_branch: Option<String>,
+    /// `auto`: one repository makes the branch directory the worktree, several group them under it. `single` and `grouped` force one or the other.
     #[serde(default)]
     pub repo_layout: RepoLayout,
+    /// `flat` turns `feature/x` into `feature-x`; `nested` keeps `feature/x`.
     #[serde(default)]
     pub branch_dirs: BranchDirs,
+    /// Where the bare clones live: `.` for the workspace root, a relative path, an absolute one, or `~`.
     #[serde(default = "def_bare_dir")]
     pub bare_dir: String,
     /// Base directory the branch directories are created in. Relative to the
     /// workspace root, or absolute; `~` is expanded.
     #[serde(default = "def_worktree_dir")]
     pub worktree_dir: String,
+    /// The repositories of the workspace, one entry each. Belongs in the workspace `ws.yaml`, not the global config.
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
+    /// The terminal multiplexer session a switch opens.
     #[serde(default)]
     pub mux: MuxConfig,
+    /// The branch picker.
     #[serde(default)]
     pub ui: UiConfig,
+    /// Tools `ws` drives around a workspace; each resolves `auto` against whether its program is on PATH.
     #[serde(default)]
     pub integrations: Integrations,
+    /// Where `ws run` finds tasks, and how it shows them.
     #[serde(default)]
     pub tasks: TasksConfig,
+    /// Where the output of `ws run` is kept.
     #[serde(default)]
     pub logs: LogsConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RepoConfig {
+    /// Name of the repository. Defaults to the last segment of the URL without `.git`.
     #[serde(default)]
     pub name: Option<String>,
+    /// Where to clone from.
     pub url: String,
     /// Where this repo sits inside a branch directory; defaults to its name.
     /// May be nested, e.g. `services/api`.
     #[serde(default)]
     pub path: Option<String>,
+    /// Command or commands run in the worktree once per new worktree, after the install. A string or a list; placeholders such as `{branch}` and `{env:NAME}` are replaced.
     #[serde(default)]
     pub setup: Option<Setup>,
 }
@@ -93,14 +108,14 @@ pub fn repo_name_from_url(url: &str) -> String {
     tail.to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Setup {
     One(String),
     Many(Vec<String>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum RepoLayout {
     /// One repo -> the branch directory itself is the worktree; more -> grouped.
@@ -112,7 +127,7 @@ pub enum RepoLayout {
     Grouped,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum BranchDirs {
     /// `feature/x` -> `feature-x`
@@ -122,15 +137,20 @@ pub enum BranchDirs {
     Nested,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct MuxConfig {
+    /// `auto` picks the multiplexer that is running or installed.
     pub backend: Backend,
+    /// Session name, with `{workspace}`, `{branch}` and `{branch_raw}`.
     pub session: String,
     /// Name of the shared window/pane; empty disables it.
     pub root_window: String,
+    /// What to do with no multiplexer: `print-path` prints the branch directory, `nothing` stays silent.
     pub on_none: OnNone,
+    /// Settings for tmux.
     pub tmux: TmuxConfig,
+    /// Settings for herdr.
     pub herdr: HerdrConfig,
 }
 
@@ -147,7 +167,7 @@ impl Default for MuxConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Backend {
     #[default]
@@ -157,7 +177,7 @@ pub enum Backend {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum OnNone {
     #[default]
@@ -165,10 +185,12 @@ pub enum OnNone {
     Nothing,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct TmuxConfig {
+    /// `windows`: one window per repository. `panes`: all of them in one window.
     pub layout: TmuxLayout,
+    /// Launcher command, one word per element.
     pub command: Vec<String>,
 }
 
@@ -181,7 +203,7 @@ impl Default for TmuxConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum TmuxLayout {
     #[default]
@@ -189,14 +211,16 @@ pub enum TmuxLayout {
     Panes,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct HerdrConfig {
+    /// `tabs`: one tab per repository. `panes`: all of them side by side in one tab.
     pub layout: HerdrLayout,
     /// Only read by the `panes` layout.
     pub split_direction: Direction,
     /// Named herdr session; only passed when running from outside herdr.
     pub session: Option<String>,
+    /// Launcher command, one word per element.
     pub command: Vec<String>,
 }
 
@@ -213,7 +237,7 @@ impl Default for HerdrConfig {
 
 /// How the repositories of a branch are laid out inside the herdr workspace —
 /// the counterpart of `[mux.tmux] layout`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum HerdrLayout {
     #[default]
@@ -221,7 +245,7 @@ pub enum HerdrLayout {
     Panes,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Direction {
     #[default]
@@ -238,11 +262,14 @@ impl Direction {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct UiConfig {
+    /// How the branch picker opens: `popup` (tmux popup), `inline`, `none`, or `auto`.
     pub picker: PickerMode,
+    /// Picker command, one word per element.
     pub picker_cmd: Vec<String>,
+    /// Size of the popup picker.
     pub popup: Popup,
 }
 
@@ -256,7 +283,7 @@ impl Default for UiConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum PickerMode {
     #[default]
@@ -266,10 +293,12 @@ pub enum PickerMode {
     None,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct Popup {
+    /// Width of the popup, e.g. `80%`.
     pub width: String,
+    /// Height of the popup, e.g. `60%`.
     pub height: String,
 }
 
@@ -287,14 +316,20 @@ impl Default for Popup {
 /// Every one of them resolves `enabled: auto` against whether its program is
 /// actually on `PATH`, so a workspace picks up what the machine has without
 /// being told, and `enabled: false` opts out.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct Integrations {
+    /// Register worktrees and branch directories with zoxide.
     pub zoxide: ZoxideConfig,
+    /// Untracked files kept beside the workspace and placed into every worktree.
     pub local: LocalConfig,
+    /// yarn: install held to the lockfile, seeded from another worktree.
     pub yarn: PackageManagerConfig,
+    /// pnpm: install held to the lockfile, seeded from another worktree.
     pub pnpm: PackageManagerConfig,
+    /// npm: `npm ci` by default; seeding is opt-in.
     pub npm: PackageManagerConfig,
+    /// uv: `uv sync`; a virtualenv is never seeded.
     pub uv: PackageManagerConfig,
 }
 
@@ -393,9 +428,10 @@ impl Manager {
 
 /// One package manager's settings. Every key is optional and falls back to
 /// what [`Manager`] says, so `yarn: { enabled: false }` is a complete entry.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct PackageManagerConfig {
+    /// `auto` means: whenever the program is on PATH and a repository is recognisably its.
     pub enabled: Toggle,
     /// Launcher; defaults to the manager's own name.
     pub command: Option<Vec<String>>,
@@ -424,7 +460,7 @@ impl PackageManagerConfig {
 
 /// Untracked files kept beside the workspace — `.env`, editor settings, a
 /// personal `Makefile.local` — and placed into every worktree.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct LocalConfig {
     /// `auto` means: whenever `dir` exists.
@@ -448,12 +484,13 @@ impl Default for LocalConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct LocalPath {
     /// Regular expression the whole relative path has to match, with `/`
     /// between its components.
     pub pattern: String,
+    /// How a matching file is placed: `link`, `copy` or `hardlink`.
     pub mode: LocalMode,
 }
 
@@ -474,7 +511,7 @@ impl LocalPath {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalMode {
     /// A symlink to the file in the local directory: one file, shared by
@@ -488,11 +525,14 @@ pub enum LocalMode {
     Hardlink,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct ZoxideConfig {
+    /// `auto` means: whenever zoxide is on PATH.
     pub enabled: Toggle,
+    /// Which directories to register with zoxide.
     pub register: Register,
+    /// Launcher command, one word per element.
     pub command: Vec<String>,
 }
 
@@ -506,7 +546,7 @@ impl Default for ZoxideConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum Register {
     Worktrees,
@@ -517,14 +557,17 @@ pub enum Register {
 }
 
 /// Where `ws run` finds a repository's tasks, and how it shows them.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct TasksConfig {
     /// The sources a task name is looked up in, in order: the first one a
     /// repository has the task in runs it. A source left out is not read.
     pub order: Vec<TaskSource>,
+    /// Tasks from a `justfile`.
     pub just: TaskToolConfig,
+    /// Tasks from a `Taskfile.yml`.
     pub task: TaskToolConfig,
+    /// Tasks from the `scripts` of `package.json`.
     pub package: PackageScriptsConfig,
     /// Colour the prefixes — and let the tasks colour their own output,
     /// which they stop doing once it goes through a pipe.
@@ -544,7 +587,7 @@ impl Default for TasksConfig {
 }
 
 /// A file a repository declares its tasks in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskSource {
     /// A `justfile`, run with `just`.
@@ -569,22 +612,23 @@ impl TaskSource {
 }
 
 /// `just` or `task`: on when the program is on `PATH`, unless told otherwise.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct TaskToolConfig {
+    /// `auto` means: whenever the program is on PATH.
     pub enabled: Toggle,
     /// Launcher; defaults to the tool's own name.
     pub command: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct PackageScriptsConfig {
     /// `auto` means: whenever a repository has a `package.json`.
     pub enabled: Toggle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ColorMode {
     /// When the output is a terminal and `NO_COLOR` is not set.
@@ -595,9 +639,10 @@ pub enum ColorMode {
 }
 
 /// Where the output of `ws run` is kept, beyond the terminal.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct LogsConfig {
+    /// Write the output of `ws run` to log files as well.
     pub enabled: bool,
     /// `{branch_dir}` stands for the branch directory the tasks run in;
     /// otherwise resolved like `bare_dir`.
@@ -633,7 +678,23 @@ impl Default for LogsConfig {
 #[serde(try_from = "SizeValue")]
 pub struct ByteSize(pub u64);
 
-#[derive(Deserialize)]
+impl JsonSchema for ByteSize {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ByteSize".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "A size in bytes, or text like `10MB`, `512K`, `1GiB`. The units are binary. `0` never rotates.",
+            "anyOf": [
+                { "type": "integer", "minimum": 0 },
+                { "type": "string", "pattern": "^\\s*[0-9]+\\s*([kKmMgG]([bB]|[iI][bB])?|[bB])?\\s*$" }
+            ]
+        })
+    }
+}
+
+#[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum SizeValue {
     Number(u64),
@@ -687,7 +748,7 @@ impl std::fmt::Display for ByteSize {
 }
 
 /// `true` / `false` / `"auto"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Toggle {
     Bool(bool),
@@ -700,7 +761,7 @@ impl Default for Toggle {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum NamedToggle {
     Auto,
@@ -715,6 +776,24 @@ impl Toggle {
         }
     }
 }
+
+/// The JSON Schema of `ws.yaml` and the global config, which share one shape.
+/// `schema/ws.schema.json` is this output, kept in step by a test.
+pub fn schema() -> String {
+    let mut schema = schemars::schema_for!(Config);
+    schema.insert("$id".into(), SCHEMA_URL.into());
+    schema.insert("title".into(), "ws configuration".into());
+    let mut text = serde_json::to_string_pretty(&schema).expect("a schema is valid JSON");
+    text.push('\n');
+    text
+}
+
+pub const SCHEMA_URL: &str = "https://ws.fomin.space/schema/ws.json";
+
+/// First line of the files `ws init` writes: editors with the YAML language
+/// server complete and check the keys against the schema.
+const SCHEMA_MODELINE: &str =
+    "# yaml-language-server: $schema=https://ws.fomin.space/schema/ws.json";
 
 fn def_default_branch() -> String {
     "main".into()
@@ -1156,7 +1235,8 @@ fn quoted(value: &str) -> String {
 /// what is actually its own, and overrides the rest key by key when it has to.
 pub fn local_template(name: &str, repos: &[String]) -> String {
     let mut out = format!(
-        "name: {}\n\
+        "{SCHEMA_MODELINE}\n\
+         name: {}\n\
          \n\
          # Settings come from the global configuration, which `ws init --global`\n\
          # writes with every key documented. Override single keys or whole\n\
@@ -1199,7 +1279,10 @@ pub fn local_template(name: &str, repos: &[String]) -> String {
 /// The commented settings file written by `ws init --global`. Hand-written on
 /// purpose: serializing the struct would drop every comment.
 pub fn global_template() -> String {
-    "# ws — global configuration, applied to every workspace.\n\
+    format!("{SCHEMA_MODELINE}\n{GLOBAL_TEMPLATE}")
+}
+
+const GLOBAL_TEMPLATE: &str = "# ws — global configuration, applied to every workspace.\n\
      # A workspace's ws.yaml lists the repositories and overrides any key here.\n\
      \n\
      # Branch checked out by `ws fetch`.\n\
@@ -1344,9 +1427,7 @@ pub fn global_template() -> String {
      \x20 max_size: 10MB\n\
      \x20 keep: 5\n\
      \x20 # Start every line with the local time it was written.\n\
-     \x20 timestamps: true\n"
-        .to_string()
-}
+     \x20 timestamps: true\n";
 
 #[cfg(test)]
 mod tests {
@@ -1703,9 +1784,10 @@ mod tests {
                         // A commented example is a mapping key or a sequence
                         // item; anything else is prose and stays a comment.
                         Some(rest)
-                            if rest.contains(": ")
-                                || rest.ends_with(':')
-                                || rest.starts_with("- ") =>
+                            if line != SCHEMA_MODELINE
+                                && (rest.contains(": ")
+                                    || rest.ends_with(':')
+                                    || rest.starts_with("- ")) =>
                         {
                             format!("{indent}{rest}")
                         }
@@ -1776,5 +1858,69 @@ mod tests {
         let local = parse_yaml("").unwrap();
         let cfg = from_value(merge_into(global, local)).unwrap();
         assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
+    }
+
+    fn validator() -> jsonschema::Validator {
+        let schema: serde_json::Value = serde_json::from_str(&schema()).unwrap();
+        jsonschema::validator_for(&schema).unwrap()
+    }
+
+    fn yaml_to_json(text: &str) -> serde_json::Value {
+        serde_yaml_ng::from_str(text).unwrap()
+    }
+
+    #[test]
+    fn the_committed_schema_is_current() {
+        assert_eq!(
+            include_str!("../schema/ws.schema.json"),
+            schema(),
+            "regenerate it: cargo run -- schema > schema/ws.schema.json"
+        );
+    }
+
+    #[test]
+    fn the_schema_accepts_what_init_writes() {
+        let validator = validator();
+        let repos = vec!["git@github.com:org/api.git".to_string()];
+        for text in [
+            global_template(),
+            local_template("acme", &repos),
+            local_template("acme", &[]),
+        ] {
+            let errors: Vec<_> = validator
+                .iter_errors(&yaml_to_json(&text))
+                .map(|e| e.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{errors:?}\n{text}");
+        }
+    }
+
+    #[test]
+    fn the_schema_accepts_every_shape_of_a_loose_value() {
+        let valid = yaml_to_json(
+            "repos:\n  - url: x\n    setup: make\n  - url: y\n    setup: [a, b]\n\
+             integrations:\n  yarn: { enabled: false }\n  zoxide: { enabled: auto }\n\
+             logs: { max_size: 10MB }\n",
+        );
+        let numeric = yaml_to_json("logs: { max_size: 4096 }\n");
+        let validator = validator();
+        assert!(validator.is_valid(&valid));
+        assert!(validator.is_valid(&numeric));
+    }
+
+    #[test]
+    fn the_schema_rejects_what_the_parser_rejects() {
+        let validator = validator();
+        for bad in [
+            "nope: 1\n",
+            "mux: { backend: screen }\n",
+            "repos:\n  - name: api\n",
+            "integrations: { yarn: { enabled: maybe } }\n",
+            "logs: { max_size: lots }\n",
+            "mux: { tmux: { layout: tabs } }\n",
+        ] {
+            assert!(!validator.is_valid(&yaml_to_json(bad)), "accepted {bad:?}");
+            assert!(parse(bad).is_err(), "the parser accepted {bad:?}");
+        }
     }
 }

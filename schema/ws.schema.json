@@ -1,0 +1,662 @@
+{
+  "$id": "https://ws.fomin.space/schema/ws.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ws configuration",
+  "type": "object",
+  "properties": {
+    "bare_dir": {
+      "description": "Where the bare clones live: `.` for the workspace root, a relative path, an absolute one, or `~`.",
+      "type": "string",
+      "default": ".bare"
+    },
+    "base_branch": {
+      "description": "What new branches fork from. `None` means the bare clone's own HEAD.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "branch_dirs": {
+      "description": "`flat` turns `feature/x` into `feature-x`; `nested` keeps `feature/x`.",
+      "$ref": "#/$defs/BranchDirs"
+    },
+    "default_branch": {
+      "description": "Branch checked out by `ws fetch`.",
+      "type": "string",
+      "default": "main"
+    },
+    "integrations": {
+      "description": "Tools `ws` drives around a workspace; each resolves `auto` against whether its program is on PATH.",
+      "$ref": "#/$defs/Integrations"
+    },
+    "logs": {
+      "description": "Where the output of `ws run` is kept.",
+      "$ref": "#/$defs/LogsConfig"
+    },
+    "mux": {
+      "description": "The terminal multiplexer session a switch opens.",
+      "$ref": "#/$defs/MuxConfig"
+    },
+    "name": {
+      "description": "Workspace name, used in session names. Defaults to the directory `ws.yaml` is in.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    },
+    "repo_layout": {
+      "description": "`auto`: one repository makes the branch directory the worktree, several group them under it. `single` and `grouped` force one or the other.",
+      "$ref": "#/$defs/RepoLayout"
+    },
+    "repos": {
+      "description": "The repositories of the workspace, one entry each. Belongs in the workspace `ws.yaml`, not the global config.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RepoConfig"
+      }
+    },
+    "tasks": {
+      "description": "Where `ws run` finds tasks, and how it shows them.",
+      "$ref": "#/$defs/TasksConfig"
+    },
+    "ui": {
+      "description": "The branch picker.",
+      "$ref": "#/$defs/UiConfig"
+    },
+    "worktree_dir": {
+      "description": "Base directory the branch directories are created in. Relative to the\nworkspace root, or absolute; `~` is expanded.",
+      "type": "string",
+      "default": "."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Backend": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "tmux",
+        "herdr",
+        "none"
+      ]
+    },
+    "BranchDirs": {
+      "oneOf": [
+        {
+          "description": "`feature/x` -> `feature-x`",
+          "type": "string",
+          "const": "flat"
+        },
+        {
+          "description": "`feature/x` -> `feature/x`",
+          "type": "string",
+          "const": "nested"
+        }
+      ]
+    },
+    "ByteSize": {
+      "description": "A size in bytes, or text like `10MB`, `512K`, `1GiB`. The units are binary. `0` never rotates.",
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^\\s*[0-9]+\\s*([kKmMgG]([bB]|[iI][bB])?|[bB])?\\s*$"
+        }
+      ]
+    },
+    "ColorMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "always",
+            "never"
+          ]
+        },
+        {
+          "description": "When the output is a terminal and `NO_COLOR` is not set.",
+          "type": "string",
+          "const": "auto"
+        }
+      ]
+    },
+    "Direction": {
+      "type": "string",
+      "enum": [
+        "right",
+        "down"
+      ]
+    },
+    "HerdrConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Launcher command, one word per element.",
+          "type": "array",
+          "default": [
+            "herdr"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "layout": {
+          "description": "`tabs`: one tab per repository. `panes`: all of them side by side in one tab.",
+          "$ref": "#/$defs/HerdrLayout"
+        },
+        "session": {
+          "description": "Named herdr session; only passed when running from outside herdr.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "split_direction": {
+          "description": "Only read by the `panes` layout.",
+          "$ref": "#/$defs/Direction"
+        }
+      },
+      "additionalProperties": false
+    },
+    "HerdrLayout": {
+      "description": "How the repositories of a branch are laid out inside the herdr workspace —\nthe counterpart of `[mux.tmux] layout`.",
+      "type": "string",
+      "enum": [
+        "tabs",
+        "panes"
+      ]
+    },
+    "Integrations": {
+      "description": "The tools `ws` drives around a workspace, each under its own key.\n\nEvery one of them resolves `enabled: auto` against whether its program is\nactually on `PATH`, so a workspace picks up what the machine has without\nbeing told, and `enabled: false` opts out.",
+      "type": "object",
+      "properties": {
+        "local": {
+          "description": "Untracked files kept beside the workspace and placed into every worktree.",
+          "$ref": "#/$defs/LocalConfig"
+        },
+        "npm": {
+          "description": "npm: `npm ci` by default; seeding is opt-in.",
+          "$ref": "#/$defs/PackageManagerConfig"
+        },
+        "pnpm": {
+          "description": "pnpm: install held to the lockfile, seeded from another worktree.",
+          "$ref": "#/$defs/PackageManagerConfig"
+        },
+        "uv": {
+          "description": "uv: `uv sync`; a virtualenv is never seeded.",
+          "$ref": "#/$defs/PackageManagerConfig"
+        },
+        "yarn": {
+          "description": "yarn: install held to the lockfile, seeded from another worktree.",
+          "$ref": "#/$defs/PackageManagerConfig"
+        },
+        "zoxide": {
+          "description": "Register worktrees and branch directories with zoxide.",
+          "$ref": "#/$defs/ZoxideConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LocalConfig": {
+      "description": "Untracked files kept beside the workspace — `.env`, editor settings, a\npersonal `Makefile.local` — and placed into every worktree.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "Where the files are kept, resolved like `bare_dir`. With several repos\nit holds one subdirectory per repo, named after it.",
+          "type": "string",
+          "default": "local"
+        },
+        "enabled": {
+          "description": "`auto` means: whenever `dir` exists.",
+          "$ref": "#/$defs/Toggle"
+        },
+        "paths": {
+          "description": "Rules matched in order against each entry's path relative to the\nrepo's local directory; the first one that matches decides how it is\nplaced, and an entry no rule matches is left out.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocalPath"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LocalMode": {
+      "oneOf": [
+        {
+          "description": "A symlink to the file in the local directory: one file, shared by\nevery worktree, edited in one place.",
+          "type": "string",
+          "const": "link"
+        },
+        {
+          "description": "An independent copy per worktree.",
+          "type": "string",
+          "const": "copy"
+        },
+        {
+          "description": "A hard link: shared like `link`, but a real file to tools that refuse\nto follow a symlink. An editor that saves by renaming breaks it.",
+          "type": "string",
+          "const": "hardlink"
+        }
+      ]
+    },
+    "LocalPath": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "How a matching file is placed: `link`, `copy` or `hardlink`.",
+          "$ref": "#/$defs/LocalMode"
+        },
+        "pattern": {
+          "description": "Regular expression the whole relative path has to match, with `/`\nbetween its components.",
+          "type": "string",
+          "default": ".*"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LogsConfig": {
+      "description": "Where the output of `ws run` is kept, beyond the terminal.",
+      "type": "object",
+      "properties": {
+        "dir": {
+          "description": "`{branch_dir}` stands for the branch directory the tasks run in;\notherwise resolved like `bare_dir`.",
+          "type": "string",
+          "default": "{branch_dir}/logs"
+        },
+        "enabled": {
+          "description": "Write the output of `ws run` to log files as well.",
+          "type": "boolean",
+          "default": false
+        },
+        "file": {
+          "description": "The file inside `dir`, with `{branch}`, `{repo}` and `{task}` in it.\nTasks whose files coincide share one, each line marked with its task.",
+          "type": "string",
+          "default": "{repo}.{task}.log"
+        },
+        "keep": {
+          "description": "Rotated files kept beside the live one, `<file>.1` the most recent.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 5,
+          "minimum": 0
+        },
+        "max_size": {
+          "description": "A file is rotated once it would grow past this: `10MB`, `512K`, or a\nnumber of bytes. `0` never rotates.",
+          "$ref": "#/$defs/ByteSize"
+        },
+        "timestamps": {
+          "description": "Start every line with the local time it was written.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "MuxConfig": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "description": "`auto` picks the multiplexer that is running or installed.",
+          "$ref": "#/$defs/Backend"
+        },
+        "herdr": {
+          "description": "Settings for herdr.",
+          "$ref": "#/$defs/HerdrConfig"
+        },
+        "on_none": {
+          "description": "What to do with no multiplexer: `print-path` prints the branch directory, `nothing` stays silent.",
+          "$ref": "#/$defs/OnNone"
+        },
+        "root_window": {
+          "description": "Name of the shared window/pane; empty disables it.",
+          "type": "string",
+          "default": "ws"
+        },
+        "session": {
+          "description": "Session name, with `{workspace}`, `{branch}` and `{branch_raw}`.",
+          "type": "string",
+          "default": "{workspace}/{branch}"
+        },
+        "tmux": {
+          "description": "Settings for tmux.",
+          "$ref": "#/$defs/TmuxConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NamedToggle": {
+      "type": "string",
+      "enum": [
+        "auto"
+      ]
+    },
+    "OnNone": {
+      "type": "string",
+      "enum": [
+        "print-path",
+        "nothing"
+      ]
+    },
+    "PackageManagerConfig": {
+      "description": "One package manager's settings. Every key is optional and falls back to\nwhat [`Manager`] says, so `yarn: { enabled: false }` is a complete entry.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Launcher; defaults to the manager's own name.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "`auto` means: whenever the program is on PATH and a repository is recognisably its.",
+          "$ref": "#/$defs/Toggle"
+        },
+        "install": {
+          "description": "Arguments that install the dependencies. Left out, each manager gets\nthe ones that hold it to its lockfile — see\n[`crate::integration::pm::default_install_args`], which resolves them\nagainst the worktree because yarn's depend on its version.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "link": {
+          "description": "Seed a new worktree's dependency directory from an existing one.\nIgnored by a manager that cannot be seeded that way.",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "PackageScriptsConfig": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "`auto` means: whenever a repository has a `package.json`.",
+          "$ref": "#/$defs/Toggle"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PickerMode": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "popup",
+        "inline",
+        "none"
+      ]
+    },
+    "Popup": {
+      "type": "object",
+      "properties": {
+        "height": {
+          "description": "Height of the popup, e.g. `60%`.",
+          "type": "string",
+          "default": "60%"
+        },
+        "width": {
+          "description": "Width of the popup, e.g. `80%`.",
+          "type": "string",
+          "default": "80%"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Register": {
+      "type": "string",
+      "enum": [
+        "worktrees",
+        "branch-dirs",
+        "both",
+        "none"
+      ]
+    },
+    "RepoConfig": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Name of the repository. Defaults to the last segment of the URL without `.git`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "path": {
+          "description": "Where this repo sits inside a branch directory; defaults to its name.\nMay be nested, e.g. `services/api`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "setup": {
+          "description": "Command or commands run in the worktree once per new worktree, after the install. A string or a list; placeholders such as `{branch}` and `{env:NAME}` are replaced.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Setup"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url": {
+          "description": "Where to clone from.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ]
+    },
+    "RepoLayout": {
+      "oneOf": [
+        {
+          "description": "One repo -> the branch directory itself is the worktree; more -> grouped.",
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "description": "The branch directory is always the single repo's worktree.",
+          "type": "string",
+          "const": "single"
+        },
+        {
+          "description": "The branch directory always holds one subdirectory per repo.",
+          "type": "string",
+          "const": "grouped"
+        }
+      ]
+    },
+    "Setup": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "TaskSource": {
+      "description": "A file a repository declares its tasks in.",
+      "oneOf": [
+        {
+          "description": "A `justfile`, run with `just`.",
+          "type": "string",
+          "const": "just"
+        },
+        {
+          "description": "A `Taskfile.yml`, run with go-task's `task`.",
+          "type": "string",
+          "const": "task"
+        },
+        {
+          "description": "The `scripts` of `package.json`, run with the repository's own\npackage manager.",
+          "type": "string",
+          "const": "package"
+        }
+      ]
+    },
+    "TaskToolConfig": {
+      "description": "`just` or `task`: on when the program is on `PATH`, unless told otherwise.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Launcher; defaults to the tool's own name.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "`auto` means: whenever the program is on PATH.",
+          "$ref": "#/$defs/Toggle"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TasksConfig": {
+      "description": "Where `ws run` finds a repository's tasks, and how it shows them.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Colour the prefixes — and let the tasks colour their own output,\nwhich they stop doing once it goes through a pipe.",
+          "$ref": "#/$defs/ColorMode"
+        },
+        "just": {
+          "description": "Tasks from a `justfile`.",
+          "$ref": "#/$defs/TaskToolConfig"
+        },
+        "order": {
+          "description": "The sources a task name is looked up in, in order: the first one a\nrepository has the task in runs it. A source left out is not read.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TaskSource"
+          }
+        },
+        "package": {
+          "description": "Tasks from the `scripts` of `package.json`.",
+          "$ref": "#/$defs/PackageScriptsConfig"
+        },
+        "task": {
+          "description": "Tasks from a `Taskfile.yml`.",
+          "$ref": "#/$defs/TaskToolConfig"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TmuxConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Launcher command, one word per element.",
+          "type": "array",
+          "default": [
+            "tmux"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "layout": {
+          "description": "`windows`: one window per repository. `panes`: all of them in one window.",
+          "$ref": "#/$defs/TmuxLayout"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TmuxLayout": {
+      "type": "string",
+      "enum": [
+        "windows",
+        "panes"
+      ]
+    },
+    "Toggle": {
+      "description": "`true` / `false` / `\"auto\"`.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/$defs/NamedToggle"
+        }
+      ]
+    },
+    "UiConfig": {
+      "type": "object",
+      "properties": {
+        "picker": {
+          "description": "How the branch picker opens: `popup` (tmux popup), `inline`, `none`, or `auto`.",
+          "$ref": "#/$defs/PickerMode"
+        },
+        "picker_cmd": {
+          "description": "Picker command, one word per element.",
+          "type": "array",
+          "default": [
+            "fzf"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "popup": {
+          "description": "Size of the popup picker.",
+          "$ref": "#/$defs/Popup"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ZoxideConfig": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "Launcher command, one word per element.",
+          "type": "array",
+          "default": [
+            "zoxide"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "`auto` means: whenever zoxide is on PATH.",
+          "$ref": "#/$defs/Toggle"
+        },
+        "register": {
+          "description": "Which directories to register with zoxide.",
+          "$ref": "#/$defs/Register"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

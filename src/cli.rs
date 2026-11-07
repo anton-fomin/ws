@@ -159,6 +159,9 @@ pub enum Command {
     /// Print the completion script for a shell.
     Completions { shell: ShellArg },
 
+    /// Print the JSON Schema of ws.yaml and the global config, for editors.
+    Schema,
+
     /// Preview text for the fzf picker.
     #[command(hide = true, name = "__preview")]
     Preview { payload: String },
