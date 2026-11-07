@@ -419,6 +419,7 @@ fn cmd_init(
         ),
         None => {}
     }
+    eprintln!("docs: {DOCS_URL}");
     suggest_skill();
     Ok(())
 }
@@ -445,9 +446,13 @@ fn cmd_init_global(runner: &Runner, force: bool) -> Result<()> {
     }
     std::fs::write(&path, text).with_context(|| format!("cannot write {}", path.display()))?;
     eprintln!("wrote {}", path.display());
+    eprintln!("docs: {DOCS_URL}");
     suggest_skill();
     Ok(())
 }
+
+/// Where the documentation is.
+const DOCS_URL: &str = "https://ws.fomin.space/docs/getting-started/";
 
 /// Where the docs explain installing the agent skills.
 const SKILL_DOCS: &str = "https://ws.fomin.space/docs/coding-agents/";

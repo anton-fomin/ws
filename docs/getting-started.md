@@ -10,14 +10,14 @@ On any Linux distribution or macOS, the install script downloads a prebuilt
 binary from the latest [release](https://github.com/anton-fomin/ws/releases):
 
 ```
-curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh
+curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh
 ```
 
 It puts `ws` in `~/.local/bin`, without sudo, and says so if that directory is
 not on `PATH`. It touches no rc files. Options go after `sh -s --`:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh -s -- --version v0.8.0
+curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.8.0
 ```
 
 | | |
@@ -40,7 +40,7 @@ optional [integration](integrations/index.md).
 release also carries the `install.sh` it was published with:
 
 ```
-curl -fsSLO https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh
+curl -fsSLO https://github.com/anton-fomin/ws/releases/latest/download/install.sh
 less install.sh
 sh install.sh
 ```

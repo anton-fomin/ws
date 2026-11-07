@@ -1,0 +1,16 @@
+name: Feature request
+description: Something ws could do for a project that spans several repositories.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and what you do today instead.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: How it could work, as commands or `ws.yaml`.
