@@ -95,3 +95,23 @@ mux:
 `WS_TMUX_CMD`, `WS_HERDR_CMD`, `WS_ZOXIDE_CMD`, `WS_YARN_CMD`, `WS_PNPM_CMD`,
 `WS_NPM_CMD`, `WS_UV_CMD`, `WS_JUST_CMD`, `WS_TASK_CMD` and `WS_PICKER_CMD`
 override those at runtime.
+
+## Editor completion
+
+`ws.yaml` and the global config have a [JSON Schema](https://ws.fomin.space/schema/ws.json),
+so an editor can complete keys and values, show what each one does, and flag a
+typo before `ws` does. The files `ws init` writes already start with the line
+that points an editor at it:
+
+```yaml
+# yaml-language-server: $schema=https://ws.fomin.space/schema/ws.json
+```
+
+Editors that run the YAML language server — VS Code with the Red Hat YAML
+extension, Neovim with `yamlls`, Helix, Zed — read that line on their own.
+In JetBrains IDEs, add the URL under Settings › Languages & Frameworks ›
+Schemas and DTDs › JSON Schema Mappings and map it to `ws.yaml`.
+
+The same schema describes both files, so it allows `repos` in the global
+config; `ws` still rejects it there. `ws schema` prints the schema of the
+installed version, for offline use.

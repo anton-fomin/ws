@@ -109,6 +109,10 @@ fn run() -> Result<()> {
             cli::completions(shell, &mut std::io::stdout());
             Ok(())
         }
+        Command::Schema => {
+            print!("{}", config::schema());
+            Ok(())
+        }
         Command::Complete { what, word } => {
             cmd_complete(&runner, &cwd, what, word.as_deref().unwrap_or_default())
         }
