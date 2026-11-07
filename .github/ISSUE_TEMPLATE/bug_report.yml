@@ -1,0 +1,36 @@
+name: Bug report
+description: Something ws did that it should not have, or did not do.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what you got. Paste the output.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: ws.yaml
+      description: Your workspace `ws.yaml` and, if it matters, the global config. Remove URLs you do not want to share.
+      render: yaml
+  - type: input
+    id: version
+    attributes:
+      label: ws version
+      description: Output of `ws --version`.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: OS and architecture, shell, and multiplexer if one is involved (for example "Debian 12 arm64, zsh, tmux 3.4").
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `ws status`
+      render: text

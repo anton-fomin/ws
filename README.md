@@ -6,6 +6,8 @@ Multi-repo git worktree workspaces. One command checks a branch out in every
 repository of a project, runs each repo's setup, and lays the result out in
 tmux or [herdr](https://herdr.dev).
 
+[![ws switch opens a session with a window per repository, ws run dev starts both dev servers](docs/demo.gif)](https://ws.fomin.space)
+
 ```
 ws init --global                                   # once: your settings
 ws init --repo git@github.com:org/api.git --repo git@github.com:org/web.git
@@ -32,12 +34,32 @@ tmux or herdr session over the branch directory. `ws run dev` then starts
 On Linux or macOS:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh
+curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh
 ```
+
+Linux (x86_64 and arm64, static musl builds that run on any distribution) and
+macOS (Intel and Apple Silicon). Windows is not supported. The installer checks
+each download against its SHA-256 file, and the script is attached to every
+release if you would rather read it first.
 
 Nix, pinned versions and installing by hand are in
 [Getting started](docs/getting-started.md). `git` is the only requirement;
 tmux, herdr, fzf, zoxide and the package managers are optional integrations.
+
+## ws and plain git worktree
+
+`ws` is built on `git worktree`, with one bare clone per repository. For a
+project that spans several repositories it does what you would otherwise do by
+hand, once per repository, for every branch:
+
+| | plain `git worktree` | `ws` |
+|---|---|---|
+| Check a branch out in every repo | `git worktree add` in each repo, then `cd` into each | `ws switch feature/x` makes one branch directory with a worktree per repo |
+| Untracked files (`.env`, `.npmrc`) | copied across by hand, and forgotten | kept once in `local/`, linked or copied into every new worktree |
+| Dependencies | a full install in every worktree | installed held to the lockfile; yarn and pnpm start from hard links of the branch you came from |
+| Per-repo setup steps | remembered, or in a wiki | `setup` in `ws.yaml`, run once per worktree |
+| Terminal layout | open the windows yourself | a tmux or herdr session, one window per repo |
+| Run `dev`, `test` or `lint` | one terminal per repo | `ws run dev` in every repo at once, with prefixed output |
 
 ## Documentation
 

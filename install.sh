@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install a prebuilt ws release from GitHub.
 #
-#   curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/anton-fomin/ws/main/install.sh | sh -s -- --version v0.8.0
+#   curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.8.0
 #
 # Run it again to upgrade. Uninstall with `rm ~/.local/bin/ws`.
 
