@@ -17,7 +17,7 @@ It puts `ws` in `~/.local/bin`, without sudo, and says so if that directory is
 not on `PATH`. It touches no rc files. Options go after `sh -s --`:
 
 ```
-curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.8.0
+curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.9.0
 ```
 
 | | |
@@ -49,8 +49,8 @@ sh install.sh
 release page, then:
 
 ```
-sha256sum -c ws-v0.8.0-x86_64-unknown-linux-musl.tar.gz.sha256   # shasum -a 256 -c on macOS
-tar -xzf ws-v0.8.0-x86_64-unknown-linux-musl.tar.gz
+sha256sum -c ws-v0.9.0-x86_64-unknown-linux-musl.tar.gz.sha256   # shasum -a 256 -c on macOS
+tar -xzf ws-v0.9.0-x86_64-unknown-linux-musl.tar.gz
 install -m 755 ws ~/.local/bin/ws
 ```
 
@@ -116,7 +116,7 @@ Under Home Manager it is the same expression in `home.packages`.
 **Pin to a release** by putting the tag in the URL:
 
 ```
-github:anton-fomin/ws/v0.8.0
+github:anton-fomin/ws/v0.9.0
 ```
 
 **In a project's dev shell**
@@ -129,7 +129,7 @@ version for everyone working on the project:
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     ws = {
-      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.8.0
+      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.9.0
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

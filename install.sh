@@ -2,7 +2,7 @@
 # Install a prebuilt ws release from GitHub.
 #
 #   curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh
-#   curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.8.0
+#   curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.9.0
 #
 # Run it again to upgrade. Uninstall with `rm ~/.local/bin/ws`.
 
@@ -20,7 +20,7 @@ Install ws from a GitHub release.
 Usage: install.sh [options]
 
 Options:
-  --version <tag>      release to install, e.g. v0.8.0 (default: the latest)
+  --version <tag>      release to install, e.g. v0.9.0 (default: the latest)
   --bin-dir <dir>      where to put the binary (default: \$WS_INSTALL_DIR or ~/.local/bin)
   --libc <musl|gnu>    Linux only: static musl build (default) or the glibc build,
                        which needs glibc ${min_glibc_major}.${min_glibc_minor} or newer
