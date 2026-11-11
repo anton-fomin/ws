@@ -51,6 +51,11 @@ seen that branch falls back to the base too, with a warning; unlike `--from`,
 this one is a default rather than an instruction, so it bends instead of
 breaking.
 
+For an empty repository with no commits, `ws switch` creates an empty worktree
+on the requested unborn branch (requires Git 2.42 or newer). No initial commit
+is created: add files and make your first commit normally. An explicit `--from`
+still requires that ref to exist in every repository.
+
 **Which branch directory you are in** is answered by walking up from wherever
 you stand, not by listing every repository's worktrees. A branch directory
 that *holds* repositories carries a `.ws.yaml` naming itself:

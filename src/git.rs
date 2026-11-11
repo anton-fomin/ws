@@ -176,6 +176,13 @@ pub fn rev_exists(runner: &Runner, bare: &Path, rev: &str) -> bool {
     ]))
 }
 
+/// Whether the repository has neither refs nor a detached HEAD commit.
+pub fn is_empty(runner: &Runner, bare: &Path) -> Result<bool> {
+    let refs =
+        runner.capture(&git(bare).args(["for-each-ref", "--count=1", "--format=%(refname)"]))?;
+    Ok(refs.trim().is_empty() && !rev_exists(runner, bare, "HEAD"))
+}
+
 /// How the branch should be created when adding a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BranchSource {
@@ -185,6 +192,8 @@ pub enum BranchSource {
     Track,
     /// Create a new branch from this ref.
     New(String),
+    /// Create an unborn branch in a repository without any commits.
+    Unborn,
 }
 
 /// The `git worktree add` invocation for a branch; kept pure so its shape can
@@ -200,6 +209,7 @@ pub fn worktree_add_cmd(bare: &Path, path: &Path, branch: &str, source: &BranchS
             .path_arg(path)
             .arg(format!("origin/{branch}")),
         BranchSource::New(start) => base.arg("-b").arg(branch).path_arg(path).arg(start),
+        BranchSource::Unborn => base.arg("--orphan").arg("-b").arg(branch).path_arg(path),
     }
 }
 
@@ -351,6 +361,10 @@ detached
     fn worktree_add_builds_expected_commands() {
         let bare = Path::new("/w/.bare/api.git");
         let path = Path::new("/w/feature-x/api");
+        assert_eq!(
+            worktree_add_cmd(bare, path, "feature/x", &BranchSource::Unborn).display(),
+            "git -C /w/.bare/api.git worktree add --orphan -b feature/x /w/feature-x/api"
+        );
         assert_eq!(
             worktree_add_cmd(bare, path, "feature/x", &BranchSource::Local).display(),
             "git -C /w/.bare/api.git worktree add /w/feature-x/api feature/x"

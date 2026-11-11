@@ -177,7 +177,7 @@ pub fn switch(
                 branch,
                 options.from.as_ref(),
                 ws.config.base_branch.as_deref(),
-            );
+            )?;
             if let Some(start) = &options.from {
                 if start.is_flag() && !matches!(source, BranchSource::New(_)) {
                     eprintln!("warning: {name}: {branch} exists already, --from is not used");
@@ -190,7 +190,7 @@ pub fn switch(
                     // started as far as this workspace is concerned.
                     BranchSource::Track => Some(format!("origin/{branch}")),
                     // It was already here: `ws` did not start it anywhere.
-                    BranchSource::Local => None,
+                    BranchSource::Local | BranchSource::Unborn => None,
                 };
             }
             eprintln!("creating worktree {} ({name})", path.display());
@@ -371,14 +371,20 @@ fn branch_source(
     branch: &str,
     from: Option<&Start>,
     base: Option<&str>,
-) -> BranchSource {
+) -> Result<BranchSource> {
     if git::local_branch_exists(runner, bare, branch) {
-        return BranchSource::Local;
+        return Ok(BranchSource::Local);
     }
     if git::remote_branch_exists(runner, bare, branch) {
-        return BranchSource::Track;
+        return Ok(BranchSource::Track);
     }
-    BranchSource::New(resolve_base(runner, bare, repo, from, base))
+    // A dry-run clone has not created the bare directory yet.
+    if bare.exists() && git::is_empty(runner, bare)? {
+        return Ok(BranchSource::Unborn);
+    }
+    Ok(BranchSource::New(resolve_base(
+        runner, bare, repo, from, base,
+    )))
 }
 
 /// What a new branch starts from: `--from` when it names something this

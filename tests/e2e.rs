@@ -184,6 +184,81 @@ fn single_repo_uses_the_branch_directory_as_the_worktree() {
 }
 
 #[test]
+fn empty_origin_creates_an_unborn_worktree() {
+    let tmp = tempdir();
+    let origin = tmp.path().join("origin.git");
+    git(
+        tmp.path(),
+        &[
+            "init",
+            "--bare",
+            "--initial-branch=main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!("repos:\n  - name: api\n    url: \"{}\"\n", origin.display()),
+    );
+
+    let missing = ws(&root)
+        .args(["switch", "main", "--from", "missing", "--cd"])
+        .assert()
+        .failure();
+    assert!(String::from_utf8_lossy(&missing.get_output().stderr)
+        .contains("--from missing is not in api"));
+    assert!(!root.join("main").exists());
+    let dry = ws(&root)
+        .args(["--dry-run", "switch", "main", "--cd"])
+        .output()
+        .unwrap();
+    assert!(
+        dry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    assert!(String::from_utf8_lossy(&dry.stderr).contains("--orphan"));
+    assert!(!root.join("main").exists());
+    ws(&root)
+        .args(["switch", "main", "--cd"])
+        .assert()
+        .success();
+    let worktree = root.join("main");
+    assert!(worktree.join(".git").exists());
+    let branch = std::process::Command::new("git")
+        .args(["symbolic-ref", "HEAD"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert!(branch.status.success());
+    assert_eq!(
+        String::from_utf8(branch.stdout).unwrap().trim(),
+        "refs/heads/main"
+    );
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(&worktree)
+        .output()
+        .unwrap();
+    assert!(!head.status.success(), "must not invent an initial commit");
+    ws(&root)
+        .args(["switch", "main", "--cd"])
+        .assert()
+        .success();
+
+    fs::write(worktree.join("README.md"), "first commit\n").unwrap();
+    git(&worktree, &["add", "README.md"]);
+    git(&worktree, &["commit", "-m", "first commit"]);
+    ws(&root)
+        .args(["switch", "feature", "--cd"])
+        .assert()
+        .success();
+    assert!(root.join("feature/README.md").exists());
+}
+
+#[test]
 fn nested_branch_dirs_keep_the_hierarchy() {
     let tmp = tempdir();
     let origins = tmp.path().join("origins");
