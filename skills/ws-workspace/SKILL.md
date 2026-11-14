@@ -35,6 +35,8 @@ ws switch <branch> --cd --from <ref>    # new branch starting at a ref every rep
 
 Always pass `--cd`: without it `ws` switches the user's tmux client or takes over the terminal. A new branch forks from the branch directory you stand in; pass `--from` when it should start elsewhere. Then `cd` into the printed directory.
 
+New herdr workspaces in the default tabs layout use labels like `1 · ws`, `2 · api`, `3 · web` (single repo: `1 · <repo>`). `mux.herdr.tab_name` customizes these with `{number}` and `{name}`; `"{name}"` removes numbering. Existing workspaces keep their labels; tmux names and herdr pane labels are unchanged.
+
 `git switch`/`git checkout` inside a worktree moves only that one repo and leaves the branch directory named for a branch it no longer holds — keep the worktree on its branch. Likewise leave `git worktree add/remove` to `ws`.
 
 `ws rm <branch>` deletes worktrees, logs and the session; `--force` discards uncommitted work. Both are the user's call — ask first.

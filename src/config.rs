@@ -216,6 +216,8 @@ pub enum TmuxLayout {
 pub struct HerdrConfig {
     /// `tabs`: one tab per repository. `panes`: all of them side by side in one tab.
     pub layout: HerdrLayout,
+    /// Tab label template for `tabs`: {number} is the one-based position, {name} the slot name.
+    pub tab_name: String,
     /// Only read by the `panes` layout.
     pub split_direction: Direction,
     /// Named herdr session; only passed when running from outside herdr.
@@ -228,6 +230,7 @@ impl Default for HerdrConfig {
     fn default() -> Self {
         HerdrConfig {
             layout: HerdrLayout::Tabs,
+            tab_name: "{number} · {name}".into(),
             split_direction: Direction::Right,
             session: None,
             command: vec!["herdr".into()],
@@ -1317,6 +1320,8 @@ const GLOBAL_TEMPLATE: &str = "# ws — global configuration, applied to every w
      \x20   # tabs: one tab per repository, plus one for the branch directory;\n\
      \x20   # panes: all of them side by side in a single tab.\n\
      \x20   layout: tabs\n\
+     \x20   # Tab labels: {number} is the one-based position, {name} the repo/shared name.\n\
+     \x20   tab_name: \"{number} · {name}\"\n\
      \x20   # Where `panes` splits; ignored by `tabs`.\n\
      \x20   split_direction: right\n\
      \x20   command: [herdr]\n\
@@ -1712,6 +1717,7 @@ mod tests {
         assert_eq!(global.mux.tmux.layout, defaults.mux.tmux.layout);
         assert_eq!(global.mux.tmux.command, defaults.mux.tmux.command);
         assert_eq!(global.mux.herdr.layout, defaults.mux.herdr.layout);
+        assert_eq!(global.mux.herdr.tab_name, defaults.mux.herdr.tab_name);
         assert_eq!(
             global.mux.herdr.split_direction,
             defaults.mux.herdr.split_direction
@@ -1858,6 +1864,20 @@ mod tests {
         let local = parse_yaml("").unwrap();
         let cfg = from_value(merge_into(global, local)).unwrap();
         assert_eq!(cfg.branch_dirs, BranchDirs::Nested);
+    }
+
+    #[test]
+    fn herdr_tab_names_default_and_merge_key_by_key() {
+        assert_eq!(parse("").unwrap().mux.herdr.tab_name, "{number} · {name}");
+        let global = parse_yaml("mux:\n  herdr:\n    tab_name: '{name}'\n").unwrap();
+        let local = parse_yaml("mux:\n  herdr:\n    split_direction: down\n").unwrap();
+        let cfg = from_value(merge_into(global.clone(), local)).unwrap();
+        assert_eq!(cfg.mux.herdr.tab_name, "{name}");
+        assert_eq!(cfg.mux.herdr.split_direction, Direction::Down);
+
+        let local = parse_yaml("mux:\n  herdr:\n    tab_name: '{number} - {name}'\n").unwrap();
+        let cfg = from_value(merge_into(global, local)).unwrap();
+        assert_eq!(cfg.mux.herdr.tab_name, "{number} - {name}");
     }
 
     fn validator() -> jsonschema::Validator {

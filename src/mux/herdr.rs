@@ -20,6 +20,7 @@ use crate::mux::{inside_herdr, Mux, SessionPlan};
 pub struct Herdr {
     command: Vec<String>,
     layout: HerdrLayout,
+    tab_name: String,
     direction: Direction,
     session: Option<String>,
     /// Running inside a herdr pane, where the session context is inherited.
@@ -31,6 +32,7 @@ impl Herdr {
         Herdr {
             command: launcher_from_env("WS_HERDR_CMD").unwrap_or_else(|| config.command.clone()),
             layout: config.layout,
+            tab_name: config.tab_name.clone(),
             direction: config.split_direction,
             session: config.session.clone(),
             inherits_context: inside_herdr(),
@@ -69,17 +71,31 @@ impl Herdr {
             .args(["--label", &plan.session]))
     }
 
-    pub fn tab_create_cmd(&self, workspace: &str, cwd: &Path, label: &str) -> Result<Cmd> {
+    pub fn tab_create_cmd(
+        &self,
+        workspace: &str,
+        cwd: &Path,
+        number: usize,
+        name: &str,
+    ) -> Result<Cmd> {
+        let label = self.tab_label(number, name);
         Ok(self
             .base()?
             .args(["tab", "create", "--workspace", workspace, "--cwd"])
             .path_arg(cwd)
-            .args(["--label", label])
+            .args(["--label", &label])
             .arg("--no-focus"))
     }
 
-    pub fn tab_rename_cmd(&self, tab: &str, label: &str) -> Result<Cmd> {
-        Ok(self.base()?.args(["tab", "rename", tab, label]))
+    pub fn tab_rename_cmd(&self, tab: &str, number: usize, name: &str) -> Result<Cmd> {
+        let label = self.tab_label(number, name);
+        Ok(self.base()?.args(["tab", "rename", tab, &label]))
+    }
+
+    fn tab_label(&self, number: usize, name: &str) -> String {
+        self.tab_name
+            .replace("{number}", &number.to_string())
+            .replace("{name}", name)
     }
 
     pub fn split_cmd(&self, pane: &str, cwd: &Path) -> Result<Cmd> {
@@ -147,11 +163,12 @@ impl Mux for Herdr {
                 let tab = pick(&created, &["result", "tab", "tab_id"])
                     .or_else(|| first_string(&created, "tab_id"))
                     .context("herdr workspace create did not report a tab id")?;
-                runner.run_quiet(&self.tab_rename_cmd(&tab, &first.name)?)?;
-                for slot in rest {
+                runner.run_quiet(&self.tab_rename_cmd(&tab, 1, &first.name)?)?;
+                for (i, slot) in rest.iter().enumerate() {
                     runner.run_quiet(&self.tab_create_cmd(
                         &workspace_id,
                         &slot.path,
+                        i + 2,
                         &slot.name,
                     )?)?;
                 }
@@ -239,6 +256,7 @@ mod tests {
         Herdr {
             command: vec!["herdr".into()],
             layout: HerdrLayout::Tabs,
+            tab_name: HerdrConfig::default().tab_name,
             direction: Direction::Right,
             session: session.map(str::to_string),
             inherits_context: false,
@@ -265,14 +283,14 @@ mod tests {
             "herdr pane rename w1:p2 api"
         );
         assert_eq!(
-            h.tab_create_cmd("w1", Path::new("/w/feature-x/api"), "api")
+            h.tab_create_cmd("w1", Path::new("/w/feature-x/api"), 2, "api")
                 .unwrap()
                 .display(),
-            "herdr tab create --workspace w1 --cwd /w/feature-x/api --label api --no-focus"
+            "herdr tab create --workspace w1 --cwd /w/feature-x/api --label '2 · api' --no-focus"
         );
         assert_eq!(
-            h.tab_rename_cmd("w1:t1", "ws").unwrap().display(),
-            "herdr tab rename w1:t1 ws"
+            h.tab_rename_cmd("w1:t1", 1, "ws").unwrap().display(),
+            "herdr tab rename w1:t1 '1 · ws'"
         );
         assert_eq!(
             h.focus_cmd("w1").unwrap().display(),
@@ -305,6 +323,7 @@ mod tests {
                 "--".into(),
             ],
             layout: HerdrLayout::Panes,
+            tab_name: HerdrConfig::default().tab_name,
             direction: Direction::Down,
             session: None,
             inherits_context: false,
@@ -333,6 +352,43 @@ mod tests {
             h.create_cmd(&p).unwrap().display(),
             "herdr workspace create --cwd /w/feature-x/api --label acme/feature-x"
         );
+        assert_eq!(
+            h.tab_rename_cmd("w1:t1", 1, &p.slots()[0].name)
+                .unwrap()
+                .display(),
+            "herdr tab rename w1:t1 '1 · api'"
+        );
+    }
+
+    #[test]
+    fn tab_labels_keep_custom_names_and_multi_digit_numbers() {
+        let h = herdr(None);
+        let cmd = h
+            .tab_create_cmd("w1", Path::new("/w/shared tools"), 12, "shared tools")
+            .unwrap();
+        assert_eq!(cmd.args[7], "12 · shared tools");
+    }
+
+    #[test]
+    fn tab_label_templates_apply_to_created_and_renamed_tabs() {
+        let mut h = herdr(None);
+        for (template, expected) in [
+            ("{name}", "api"),
+            ("{number} - {name}", "2 - api"),
+            ("{name} ({number})", "api (2)"),
+            ("{number}/{number} {name} {other}", "2/2 api {other}"),
+        ] {
+            h.tab_name = template.into();
+            let create = h
+                .tab_create_cmd("w1", Path::new("/w/api"), 2, "api")
+                .unwrap();
+            let rename = h.tab_rename_cmd("w1:t2", 2, "api").unwrap();
+            assert_eq!(create.args[7], expected);
+            assert_eq!(rename.args[3], expected);
+        }
+        h.tab_name = "{number} · {name}".into();
+        assert_eq!(h.tab_label(1, "{number}"), "1 · {number}");
+        assert_eq!(h.rename_cmd("w1:p1", "api").unwrap().args[3], "api");
     }
 
     #[test]

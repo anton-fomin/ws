@@ -96,6 +96,11 @@ mux:
 `WS_NPM_CMD`, `WS_UV_CMD`, `WS_JUST_CMD`, `WS_TASK_CMD` and `WS_PICKER_CMD`
 override those at runtime.
 
+`mux.herdr.tab_name` controls labels for new herdr workspaces in the `tabs`
+layout. It defaults to `"{number} · {name}"`; use `"{name}"` for unnumbered
+labels. See [herdr tab names](integrations/multiplexers.md#herdr-tab-names)
+for placeholders and examples.
+
 ## Editor completion
 
 `ws.yaml` and the global config have a [JSON Schema](https://ws.fomin.space/schema/ws.json),

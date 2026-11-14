@@ -160,6 +160,11 @@
         "split_direction": {
           "description": "Only read by the `panes` layout.",
           "$ref": "#/$defs/Direction"
+        },
+        "tab_name": {
+          "description": "Tab label template for `tabs`: {number} is the one-based position, {name} the slot name.",
+          "type": "string",
+          "default": "{number} · {name}"
         }
       },
       "additionalProperties": false

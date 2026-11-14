@@ -132,6 +132,8 @@ Start the agent in the session's first pane: the first pane of the first tab or 
 
 **herdr** (the session check found the herdr workspace):
 
+New workspaces in the default tabs layout use labels like `1 · ws`, `2 · api`, `3 · web` (single repo: `1 · <repo>`). `mux.herdr.tab_name` customizes these with `{number}` and `{name}`; `"{name}"` removes numbering. Existing workspaces keep their labels. Select tabs by id and order, as below, rather than label.
+
 ```sh
 W=$(<herdr> workspace list | jq -r --arg l '<session>' '.result.workspaces[] | select(.label == $l) | .workspace_id')
 T=$(<herdr> tab list --workspace "$W" | jq -r '.result.tabs | min_by(.number) | .tab_id')
