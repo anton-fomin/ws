@@ -4,7 +4,7 @@
 `justfile`, the tasks of a `Taskfile.yml`, the `scripts` of `package.json` —
 in the branch directory you are standing in:
 
-```
+```sh
 ws run                         # every task, per repository
 ws run @api                    # the tasks of api
 ws run dev                     # dev in every repository that has one, at once

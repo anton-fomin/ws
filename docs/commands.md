@@ -23,7 +23,7 @@ every command.
 `ws switch --from <ref>` says where a branch that does not exist yet starts,
 overriding the configured `base_branch` for that one call:
 
-```
+```sh
 ws switch hotfix/x --from release/v0.4.5        # a tag, or a branch
 ws switch hotfix/x --from origin/release/v0.4.5 # the remote one, explicitly
 ```

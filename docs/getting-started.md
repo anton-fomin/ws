@@ -9,15 +9,15 @@ it into your shell and builds a first workspace.
 On any Linux distribution or macOS, the install script downloads a prebuilt
 binary from the latest [release](https://github.com/anton-fomin/ws/releases):
 
-```
+```sh
 curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh
 ```
 
 It puts `ws` in `~/.local/bin`, without sudo, and says so if that directory is
 not on `PATH`. It touches no rc files. Options go after `sh -s --`:
 
-```
-curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.10.0
+```sh
+curl -fsSL https://github.com/anton-fomin/ws/releases/latest/download/install.sh | sh -s -- --version v0.10.1
 ```
 
 | | |
@@ -39,7 +39,7 @@ optional [integration](integrations/index.md).
 **To read the script first**, download it rather than piping it — every
 release also carries the `install.sh` it was published with:
 
-```
+```sh
 curl -fsSLO https://github.com/anton-fomin/ws/releases/latest/download/install.sh
 less install.sh
 sh install.sh
@@ -48,9 +48,9 @@ sh install.sh
 **By hand**, download `ws-<tag>-<target>.tar.gz` and its `.sha256` from the
 release page, then:
 
-```
-sha256sum -c ws-v0.10.0-x86_64-unknown-linux-musl.tar.gz.sha256   # shasum -a 256 -c on macOS
-tar -xzf ws-v0.10.0-x86_64-unknown-linux-musl.tar.gz
+```sh
+sha256sum -c ws-v0.10.1-x86_64-unknown-linux-musl.tar.gz.sha256   # shasum -a 256 -c on macOS
+tar -xzf ws-v0.10.1-x86_64-unknown-linux-musl.tar.gz
 install -m 755 ws ~/.local/bin/ws
 ```
 
@@ -64,13 +64,13 @@ enabled: `nix.settings.experimental-features = [ "nix-command" "flakes" ];`
 
 **Try it without installing**
 
-```
+```sh
 nix run github:anton-fomin/ws -- --help
 ```
 
 **Per user**
 
-```
+```sh
 nix profile add github:anton-fomin/ws
 ```
 
@@ -116,7 +116,7 @@ Under Home Manager it is the same expression in `home.packages`.
 **Pin to a release** by putting the tag in the URL:
 
 ```
-github:anton-fomin/ws/v0.10.0
+github:anton-fomin/ws/v0.10.1
 ```
 
 **In a project's dev shell**
@@ -129,7 +129,7 @@ version for everyone working on the project:
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     ws = {
-      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.10.0
+      url = "github:anton-fomin/ws";   # or github:anton-fomin/ws/v0.10.1
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -166,7 +166,7 @@ A program cannot change its parent shell's directory, so `ws switch` needs a
 small shell function to `cd` into the branch directory it opens. Add it to
 your rc file:
 
-```
+```sh
 eval "$(ws shell-init zsh)"     # ~/.zshrc; the same with bash in ~/.bashrc
 ws shell-init fish | source     # ~/.config/fish/config.fish
 ```
@@ -180,7 +180,7 @@ subcommands, flags and branch names.
 A workspace is a directory holding a `ws.yaml`. Write your personal defaults
 once, then create a workspace for a project by naming its repositories:
 
-```
+```sh
 ws init --global                                   # once: your settings
 mkdir acme && cd acme
 ws init --repo git@github.com:org/api.git --repo git@github.com:org/web.git

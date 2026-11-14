@@ -31,7 +31,7 @@ directory. Anything else you put in `.ws/` still counts.
 Install both once per user with the [`skills`](https://skills.sh) CLI,
 naming the agents you use:
 
-```
+```sh
 npx skills add anton-fomin/ws -g -a claude-code opencode
 ```
 

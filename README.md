@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/anton-fomin/ws/actions/workflows/ci.yml/badge.svg)](https://github.com/anton-fomin/ws/actions/workflows/ci.yml)
 
-Multi-repo git worktree workspaces. One command checks a branch out in every
-repository of a project, runs each repo's setup, and lays the result out in
-tmux or [herdr](https://herdr.dev).
+**One branch, every repo.** One command creates a worktree for every repository
+of a project in the same branch directory, runs each repo's setup, and opens
+your workspace in tmux or [herdr](https://herdr.dev).
 
 [![ws switch opens a session with a window per repository, ws run dev starts both dev servers](docs/demo.gif)](https://ws.fomin.space)
 
@@ -24,10 +24,34 @@ acme/
   feature-JIRA-123/web
 ```
 
-Each switch places your untracked local files (`.env`, `.npmrc`), installs
-dependencies held to the lockfile, runs each repository's setup and opens a
-tmux or herdr session over the branch directory. `ws run dev` then starts
-`dev` in every repository at once, with prefixed output.
+## Features
+
+- **Every repo, one branch directory.** Keep worktrees side by side, like
+  `project/feature-login/backend` and `project/feature-login/frontend`, instead
+  of managing each repository's worktrees separately.
+- **Automatic dependency installs.** npm, pnpm, Yarn and uv install packages
+  in new worktrees. pnpm and Yarn reuse dependencies through hardlinks from
+  the worktree you switched from, falling back to the default branch's worktree.
+- **Remote branches, ready locally.** `ws fetch` fetches every configured repo;
+  `ws switch <branch>` creates worktrees from the remote branch where it exists.
+- **Tasks across repos.** Define `dev` in a Taskfile, justfile or `package.json`,
+  then run `ws run dev` to start it in every repo that declares it, in parallel,
+  with combined, repo-prefixed terminal output.
+- **Logs your agent can read.** Enable `logs.enabled: true` to save all
+  `ws run` task output to files, or use `ws run dev --logs` for one run.
+- **Local files, without the copying ritual.** Keep `.env`, `.npmrc` and other
+  untracked files in `local/`, then symlink or copy them into your worktrees.
+- **Custom setup commands.** Run per-repo commands once when a worktree is
+  created—for example, decrypt SOPS secrets into a `.env` file.
+- **A home for CLI lovers.** Create or focus a tmux session or herdr workspace
+  for each branch, with a window or tab per repo and a shared one at the branch
+  directory root for multi-repo workspaces.
+- **Pick and jump.** Find local and remote branches with fzf through `ws pick`,
+  or jump to worktrees with zoxide.
+- **Skills for coding agents.** Use `/ws <task>` to have an agent prepare a
+  workspace and start a fresh agent there; the companion workspace skill
+  teaches agents how to navigate it and run tasks.
+- **Written in Rust.** Blazingly fast, of course.
 
 ## Install
 
@@ -45,21 +69,6 @@ release if you would rather read it first.
 Nix, pinned versions and installing by hand are in
 [Getting started](docs/getting-started.md). `git` is the only requirement;
 tmux, herdr, fzf, zoxide and the package managers are optional integrations.
-
-## ws and plain git worktree
-
-`ws` is built on `git worktree`, with one bare clone per repository. For a
-project that spans several repositories it does what you would otherwise do by
-hand, once per repository, for every branch:
-
-| | plain `git worktree` | `ws` |
-|---|---|---|
-| Check a branch out in every repo | `git worktree add` in each repo, then `cd` into each | `ws switch feature/x` makes one branch directory with a worktree per repo |
-| Untracked files (`.env`, `.npmrc`) | copied across by hand, and forgotten | kept once in `local/`, linked or copied into every new worktree |
-| Dependencies | a full install in every worktree | installed held to the lockfile; yarn and pnpm start from hard links of the branch you came from |
-| Per-repo setup steps | remembered, or in a wiki | `setup` in `ws.yaml`, run once per worktree |
-| Terminal layout | open the windows yourself | a tmux or herdr session, one window per repo |
-| Run `dev`, `test` or `lint` | one terminal per repo | `ws run dev` in every repo at once, with prefixed output |
 
 ## Documentation
 
@@ -81,6 +90,11 @@ pages are in [`docs/`](docs/) here, as of this commit:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Inspiration
+
+Inspired by [sesh](https://github.com/joshmedeski/sesh) and
+[worktrunk](https://github.com/max-sixty/worktrunk).
 
 ## License
 
