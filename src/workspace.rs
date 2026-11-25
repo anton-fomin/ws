@@ -731,17 +731,39 @@ pub fn remove(ws: &Workspace, runner: &Runner, branch: &str, force: bool) -> Res
     let grouped = ws.is_grouped();
     let mode = ws.config.branch_dirs;
     let base = ws.worktree_root();
-    let branch_dir = paths::branch_dir(&base, branch, mode);
+    let mut branch_dir = paths::branch_dir(&base, branch, mode);
     let mut worktrees = Vec::new();
     let mut dirty = Vec::new();
+    let mut found_by_git = false;
 
     for repo in &ws.config.repos {
         let name = repo.name();
-        let path = paths::worktree_path(&base, branch, mode, grouped, &repo.dir());
+        let mut path = paths::worktree_path(&base, branch, mode, grouped, &repo.dir());
+        // Ask git where the branch is checked out: the directory may have been
+        // created for another branch and switched with plain `git switch`.
+        let bare = ws.bare_path(repo);
+        if bare.exists() {
+            let checked_out = git::worktrees(runner, &bare)?
+                .into_iter()
+                .find(|w| w.branch.as_deref() == Some(branch));
+            if let Some(wt) = checked_out {
+                if let Some(dir) = paths::branch_dir_of(&wt.path, &repo.dir(), grouped) {
+                    if !found_by_git {
+                        branch_dir = dir;
+                        found_by_git = true;
+                    }
+                    path = wt.path;
+                }
+            }
+        }
         if path.exists() && git::is_dirty(runner, &path, ws.logs_in_worktree().as_deref()) {
             dirty.push(name.clone());
         }
         worktrees.push((name, path));
+    }
+
+    if !worktrees.iter().any(|(_, path)| path.exists()) {
+        bail!("no worktree for branch {branch}");
     }
 
     if !dirty.is_empty() && !force {

@@ -11,7 +11,7 @@
       packages = forAll (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
           pname = "ws";
-          version = "0.10.1";
+          version = "0.10.2";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
           # The end-to-end tests build fixture repositories with git.

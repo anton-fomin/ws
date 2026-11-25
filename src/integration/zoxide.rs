@@ -78,11 +78,12 @@ impl Zoxide {
             return;
         }
         let Some(base) = self.base() else { return };
-        let mut cmd = base.arg("remove");
+        // One call per path: `zoxide remove` fails when a path is not in its
+        // database, and a missing entry must not hide the others or warn.
         for p in paths {
-            cmd = cmd.path_arg(p);
+            let cmd = base.clone().arg("remove").path_arg(p);
+            runner.run_ignoring_failure(&cmd);
         }
-        runner.run_best_effort(&cmd);
     }
 
     /// Directories from the zoxide database that look like workspace roots.

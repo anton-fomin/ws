@@ -212,6 +212,21 @@ impl Runner {
         }
     }
 
+    /// Mutating command whose failure is expected and uninteresting (zoxide
+    /// refusing to remove a path it never knew). Output is discarded.
+    pub fn run_ignoring_failure(&self, cmd: &Cmd) {
+        if self.dry_run {
+            self.trace(cmd, true);
+            return;
+        }
+        self.trace(cmd, false);
+        let _ = cmd
+            .build()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
     /// Replace the current process. Used to hand the terminal over to
     /// `tmux attach-session`.
     pub fn exec(&self, cmd: &Cmd) -> Result<()> {

@@ -311,6 +311,37 @@ fn a_new_branch_forks_from_the_base_and_tracks_nothing() {
 }
 
 #[test]
+fn rm_finds_a_worktree_whose_branch_was_switched_with_git() {
+    let tmp = tempdir();
+    let origins = tmp.path().join("origins");
+    fs::create_dir_all(&origins).unwrap();
+    let api = origin_repo(&origins, "api");
+
+    let root = tmp.path().join("work");
+    fs::create_dir_all(&root).unwrap();
+    write_config(
+        &root,
+        &format!("repos:\n  - name: api\n    url: \"{}\"\n", api.display()),
+    );
+
+    ws(&root).args(["switch", "feat-a"]).assert().success();
+    let status = std::process::Command::new("git")
+        .args(["switch", "-c", "feat-b"])
+        .current_dir(root.join("feat-a"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    // A branch with no worktree is an error, not a silent "removed".
+    let out = ws(&root).args(["rm", "nothing-here"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no worktree for branch"));
+
+    ws(&root).args(["rm", "feat-b"]).assert().success();
+    assert!(!root.join("feat-a").exists());
+}
+
+#[test]
 fn dirty_worktrees_are_protected_from_rm() {
     let tmp = tempdir();
     let origins = tmp.path().join("origins");

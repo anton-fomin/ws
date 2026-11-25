@@ -9,7 +9,7 @@
 | `ws pick [--global]` | choose a branch or workspace with fzf (alias `p`) |
 | `ws list` | branch directories and their repos (alias `ls`) |
 | `ws path <branch> [repo]` | print a path |
-| `ws rm <branch> [--force]` | remove worktrees and close the session |
+| `ws rm <branch> [--force]` | remove the worktrees where git has the branch checked out (falling back to the branch's own directory) and close the session; fails if there is none |
 | `ws run <task>` | run a task in every repo that has it, side by side (alias `r`) |
 | `ws run @repo:task` | …in that one repo only; `ws run` alone lists the tasks |
 | `ws status` | where am I |
